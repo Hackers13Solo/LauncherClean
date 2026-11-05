@@ -13,6 +13,8 @@ import android.provider.MediaStore
 import android.os.BatteryManager
 import android.provider.AlarmClock
 import android.provider.Settings
+import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -46,10 +48,15 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -82,6 +89,7 @@ import java.util.Date
 import java.util.Calendar
 import java.util.Locale
 import kotlin.math.abs
+import kotlin.math.cos
 import kotlin.math.exp
 import kotlin.math.sin
 
@@ -94,7 +102,7 @@ val AccentColors = listOf(
 var Accent by mutableStateOf(AccentColors[0])
 
 /** Tamanhos e opções da lista de apps, compartilhados via CompositionLocal. */
-data class ListStyle(val icon: Float = 52f, val text: Float = 26f, val showNew: Boolean = true)
+data class ListStyle(val icon: Float = 52f, val text: Float = 26f, val showNew: Boolean = true, val pad: Float = 9f)
 val LocalListStyle = compositionLocalOf { ListStyle() }
 val GlassFill = Color.White.copy(alpha = 0.12f)
 val GlassBorder = Color.White.copy(alpha = 0.16f)
@@ -193,10 +201,63 @@ private class Particle(
     val loops: Int, val sway: Int, val tw: Int, val ph: Float
 )
 
-/** Partículas flutuantes + aurora em movimento, desenhadas por cima do papel de parede. */
+private class Curtain(
+    val base: Float, val amp: Float, val thick: Float, val k1: Int, val k2: Int, val ph: Float, val color: Int
+)
+
+private val CURTAINS = listOf(
+    Curtain(0.16f, 0.07f, 0.34f, 4, 6, 0.0f, 1),
+    Curtain(0.27f, 0.06f, 0.30f, 6, 4, 1.7f, 0),
+    Curtain(0.09f, 0.08f, 0.30f, 5, 8, 3.1f, 2),
+    Curtain(0.36f, 0.05f, 0.26f, 7, 5, 4.4f, 3)
+)
+
+/** Aurora: faixas de luz onduladas (verde, cor de destaque, azul e roxo) somadas ao fundo. */
+private fun DrawScope.drawAurora(t: Float, accent: Color) {
+    val w = size.width
+    val h = size.height
+    val tau = 6.2831855f
+    val cols = listOf(accent, Color(0xFF2EFFB0), Color(0xFF3D8BFF), Color(0xFFB36BFF))
+    CURTAINS.forEach { c ->
+        val col = cols[c.color]
+        val steps = 36
+        val topY = FloatArray(steps + 1)
+        val botY = FloatArray(steps + 1)
+        for (i in 0..steps) {
+            val u = i / steps.toFloat()
+            val ty = h * (c.base + c.amp * sin(u * tau * 1.3f + c.ph + t * tau * c.k1))
+            val th = h * c.thick * (0.7f + 0.3f * sin(u * tau * 2f + c.ph * 2f + t * tau * c.k2))
+            topY[i] = ty
+            botY[i] = ty + th
+        }
+        val p = Path()
+        p.moveTo(0f, topY[0])
+        for (i in 1..steps) p.lineTo(w * i / steps, topY[i])
+        for (i in steps downTo 0) p.lineTo(w * i / steps, botY[i])
+        p.close()
+        val y0 = h * (c.base - c.amp)
+        val y1 = h * (c.base + c.amp + c.thick)
+        drawPath(
+            p,
+            Brush.verticalGradient(
+                0f to Color.Transparent,
+                0.12f to col.copy(alpha = 0.60f),
+                0.55f to col.copy(alpha = 0.22f),
+                1f to Color.Transparent,
+                startY = y0, endY = y1
+            ),
+            blendMode = BlendMode.Plus
+        )
+    }
+}
+
+/**
+ * Efeitos de fundo desenhados por cima do papel de parede.
+ * mask: 1 partículas, 2 aurora, 4 neve, 8 chuva (podem ser combinados).
+ */
 @Composable
-fun FxBackground(mode: Int, modifier: Modifier = Modifier) {
-    if (mode == 0) return
+fun FxBackground(mask: Int, modifier: Modifier = Modifier) {
+    if (mask == 0) return
     val tr = rememberInfiniteTransition(label = "fx")
     val t by tr.animateFloat(0f, 1f, infiniteRepeatable(tween(60000, easing = LinearEasing)), label = "t")
     val parts = remember {
@@ -208,22 +269,28 @@ fun FxBackground(mode: Int, modifier: Modifier = Modifier) {
             )
         }
     }
+    val snow = remember {
+        val rnd = java.util.Random(19)
+        List(70) {
+            Particle(
+                rnd.nextFloat(), rnd.nextFloat(), 1.4f + rnd.nextFloat() * 2.6f,
+                4 + rnd.nextInt(7), 1 + rnd.nextInt(3), 0, rnd.nextFloat() * 6.2831855f
+            )
+        }
+    }
+    val rain = remember {
+        val rnd = java.util.Random(23)
+        List(55) {
+            Particle(rnd.nextFloat(), rnd.nextFloat(), 2f + rnd.nextFloat() * 2f, 25 + rnd.nextInt(20), 0, 0, 0f)
+        }
+    }
     val tau = 6.2831855f
     androidx.compose.foundation.Canvas(modifier.fillMaxSize()) {
         val w = size.width
         val h = size.height
-        if (mode == 2 || mode == 3) {
-            val a = t * tau * 2f
-            fun blob(cx: Float, cy: Float, rad: Float, c: Color) = drawCircle(
-                Brush.radialGradient(listOf(c, Color.Transparent), center = Offset(cx, cy), radius = rad),
-                radius = rad, center = Offset(cx, cy)
-            )
-            blob(w * (0.25f + 0.20f * sin(a)), h * (0.22f + 0.10f * sin(a + 1.5f)), w * 0.95f, Accent.copy(0.30f))
-            blob(w * (0.82f + 0.12f * sin(a + 2f)), h * (0.55f + 0.14f * sin(a + 0.7f)), w * 0.85f, Color(0xFF3D5AFE).copy(0.20f))
-            blob(w * (0.40f + 0.20f * sin(a + 4f)), h * (0.92f + 0.05f * sin(a + 3f)), w * 0.95f, Color(0xFF00E5FF).copy(0.14f))
-        }
-        if (mode == 1 || mode == 3) {
-            val dn = density
+        val dn = density
+        if ((mask and 2) != 0) drawAurora(t, Accent)
+        if ((mask and 1) != 0) {
             parts.forEach { p ->
                 val yy = (((p.y - t * p.loops) % 1f) + 1f) % 1f
                 val xx = p.x + sin(t * tau * p.sway + p.ph) * 0.03f
@@ -235,12 +302,31 @@ fun FxBackground(mode: Int, modifier: Modifier = Modifier) {
                 drawCircle(Color.White.copy(al), p.r * dn * 0.8f, c)
             }
         }
+        if ((mask and 4) != 0) {
+            snow.forEach { p ->
+                val yy = (((p.y + t * p.loops) % 1f) + 1f) % 1f
+                val xx = p.x + sin(t * tau * p.sway + p.ph) * 0.04f
+                val edge = minOf(yy, 1f - yy).coerceAtMost(0.08f) / 0.08f
+                drawCircle(Color.White.copy(0.85f * edge), p.r * dn, Offset(xx * w, yy * h))
+            }
+        }
+        if ((mask and 8) != 0) {
+            rain.forEach { p ->
+                val yy = (((p.y + t * p.loops) % 1f) + 1f) % 1f
+                val x = p.x * w
+                val y = yy * h
+                drawLine(
+                    Color(0xFFBFD9FF).copy(0.32f), Offset(x, y), Offset(x - w * 0.012f, y + h * 0.035f),
+                    strokeWidth = p.r * 0.5f * dn
+                )
+            }
+        }
     }
 }
 
 // ------------------------------------------------------------ Relógio grande
 @Composable
-fun ClockHeader(use24h: Boolean, date: String, onLong: () -> Unit) {
+fun ClockHeader(use24h: Boolean, date: String, name: String, onLong: () -> Unit) {
     val ctx = LocalContext.current
     val now by produceState(System.currentTimeMillis()) {
         while (true) { value = System.currentTimeMillis(); delay(1000) }
@@ -269,7 +355,8 @@ fun ClockHeader(use24h: Boolean, date: String, onLong: () -> Unit) {
                 modifier = Modifier.padding(bottom = 14.dp)
             )
         }
-        Text("$greeting  •  $date", fontSize = 15.sp, color = Color.White.copy(0.78f))
+        val hello = if (name.isBlank()) greeting else "$greeting, ${name.trim()}"
+        Text("$hello  •  $date", fontSize = 15.sp, color = Color.White.copy(0.78f))
     }
 }
 
@@ -285,8 +372,33 @@ private fun QuickBtn(icon: androidx.compose.ui.graphics.vector.ImageVector, acti
     ) { Icon(icon, null, tint = Color.White, modifier = Modifier.size(21.dp)) }
 }
 
+/** Abre a calculadora: apps conhecidos, qualquer app com "calc" no nome ou o atalho padrão do Android. */
+fun openCalculator(ctx: Context, apps: List<AppInfo>) {
+    val known = listOf(
+        "com.google.android.calculator", "com.android.calculator2", "com.sec.android.app.popupcalculator",
+        "com.miui.calculator", "com.coloros.calculator", "com.oneplus.calculator", "com.oppo.calculator",
+        "com.realme.calculator", "com.vivo.calculator", "com.huawei.calculator", "com.motorola.calculator",
+        "com.asus.calculator", "com.lge.calculator", "com.sonyericsson.calculator", "com.transsion.calculator",
+        "com.nothing.calculator"
+    )
+    val byKnown = apps.firstOrNull { it.pkg in known }
+    val byName = apps.firstOrNull {
+        val l = norm(it.label)
+        l.contains("calculadora") || l.contains("calculator") || it.pkg.lowercase().contains("calculator")
+    }
+    val target = byKnown ?: byName
+    if (target != null) { launchApp(ctx, target); return }
+    val ok = runCatching {
+        ctx.startActivity(
+            Intent.makeMainSelectorActivity(Intent.ACTION_MAIN, Intent.CATEGORY_APP_CALCULATOR)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        )
+    }.isSuccess
+    if (!ok) Toast.makeText(ctx, "Nenhum app de calculadora encontrado", Toast.LENGTH_SHORT).show()
+}
+
 @Composable
-fun QuickActions() {
+fun QuickActions(apps: List<AppInfo>) {
     val ctx = LocalContext.current
     val cm = remember { ctx.getSystemService(Context.CAMERA_SERVICE) as CameraManager }
     val camId = remember {
@@ -310,9 +422,7 @@ fun QuickActions() {
         QuickBtn(Icons.Rounded.Wifi, false) { go(Intent(Settings.ACTION_WIFI_SETTINGS)) }
         QuickBtn(Icons.Rounded.Bluetooth, false) { go(Intent(Settings.ACTION_BLUETOOTH_SETTINGS)) }
         QuickBtn(Icons.Rounded.PhotoCamera, false) { go(Intent(MediaStore.INTENT_ACTION_STILL_IMAGE_CAMERA)) }
-        QuickBtn(Icons.Rounded.Calculate, false) {
-            go(Intent.makeMainSelectorActivity(Intent.ACTION_MAIN, Intent.CATEGORY_APP_CALCULATOR))
-        }
+        QuickBtn(Icons.Rounded.Calculate, false) { openCalculator(ctx, apps) }
     }
 }
 
@@ -574,6 +684,32 @@ fun FoldersRow(
     }
 }
 
+/**
+ * Janela no CENTRO da tela, desenhada dentro do próprio launcher (sem Dialog do sistema):
+ * fundo só escurecido, sem desfoque, e sempre centralizada.
+ */
+@Composable
+fun CenterOverlay(onDismiss: () -> Unit, content: @Composable BoxScope.() -> Unit) {
+    BackHandler(onBack = onDismiss)
+    var shown by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { shown = true }
+    val a by animateFloatAsState(if (shown) 1f else 0f, tween(160), label = "overlay")
+    Box(
+        Modifier.fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.55f * a))
+            .pointerInput(Unit) { detectTapGestures { onDismiss() } }
+            .systemBarsPadding().imePadding().padding(24.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Box(
+            Modifier.widthIn(max = 420.dp).fillMaxWidth()
+                .graphicsLayer { alpha = a; scaleX = 0.92f + 0.08f * a; scaleY = 0.92f + 0.08f * a }
+                .pointerInput(Unit) { detectTapGestures { } },
+            content = content
+        )
+    }
+}
+
 @Composable
 fun FolderDialog(vm: LauncherVM, name: String, byPkg: Map<String, AppInfo>, onLaunch: (AppInfo) -> Unit, onDismiss: () -> Unit) {
     val folder = vm.folders.firstOrNull { it.name == name }
@@ -581,8 +717,8 @@ fun FolderDialog(vm: LauncherVM, name: String, byPkg: Map<String, AppInfo>, onLa
     if (folder == null) { LaunchedEffect(Unit) { onDismiss() }; return }
     val apps = folder.apps.mapNotNull { byPkg[it] }
 
-    Dialog(onDismissRequest = onDismiss) {
-        Surface(shape = RoundedCornerShape(30.dp), color = Color(0xF01B1B1F), contentColor = Color.White) {
+    CenterOverlay(onDismiss) {
+        Surface(shape = RoundedCornerShape(30.dp), color = Color(0xF21B1B1F), contentColor = Color.White) {
             Column(Modifier.padding(20.dp)) {
                 Text(name, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
                 Spacer(Modifier.height(14.dp))
@@ -623,8 +759,8 @@ fun FolderOptionsDialog(vm: LauncherVM, name: String, onDismiss: () -> Unit) {
         NameDialog("Renomear pasta", name, { vm.renameFolder(name, it); onDismiss() }, onDismiss)
         return
     }
-    Dialog(onDismissRequest = onDismiss) {
-        Surface(shape = RoundedCornerShape(28.dp), color = Color(0xF01B1B1F), contentColor = Color.White) {
+    CenterOverlay(onDismiss) {
+        Surface(shape = RoundedCornerShape(28.dp), color = Color(0xF21B1B1F), contentColor = Color.White) {
             Column(Modifier.padding(vertical = 12.dp)) {
                 Text(name, Modifier.padding(horizontal = 22.dp, vertical = 10.dp), fontSize = 18.sp,
                     fontWeight = FontWeight.SemiBold)
@@ -651,15 +787,22 @@ fun MenuRow(icon: androidx.compose.ui.graphics.vector.ImageVector, text: String,
 @Composable
 fun NameDialog(title: String, initial: String = "", onOk: (String) -> Unit, onDismiss: () -> Unit) {
     var t by remember { mutableStateOf(initial) }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        containerColor = Color(0xFF1B1B1F),
-        titleContentColor = Color.White,
-        title = { Text(title) },
-        text = { OutlinedTextField(t, { t = it }, singleLine = true) },
-        confirmButton = { TextButton({ if (t.isNotBlank()) onOk(t.trim()) }) { Text("OK", color = Accent) } },
-        dismissButton = { TextButton(onDismiss) { Text("Cancelar", color = Color.White.copy(0.7f)) } }
-    )
+    val focus = remember { FocusRequester() }
+    LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
+    CenterOverlay(onDismiss) {
+        Surface(shape = RoundedCornerShape(28.dp), color = Color(0xF21B1B1F), contentColor = Color.White) {
+            Column(Modifier.padding(22.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                Text(title, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
+                OutlinedTextField(
+                    t, { t = it }, Modifier.fillMaxWidth().focusRequester(focus), singleLine = true
+                )
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    TextButton(onDismiss) { Text("Cancelar", color = Color.White.copy(0.7f)) }
+                    TextButton({ if (t.isNotBlank()) onOk(t.trim()) }) { Text("OK", color = Accent) }
+                }
+            }
+        }
+    }
 }
 
 @Composable
@@ -672,8 +815,8 @@ fun AppMenuDialog(app: AppInfo, vm: LauncherVM, fromFolder: String?, onDismiss: 
         NameDialog("Nova pasta", "", { vm.createFolder(it, app.pkg); onDismiss() }, onDismiss)
         return
     }
-    Dialog(onDismissRequest = onDismiss) {
-        Surface(shape = RoundedCornerShape(28.dp), color = Color(0xF01B1B1F), contentColor = Color.White) {
+    CenterOverlay(onDismiss) {
+        Surface(shape = RoundedCornerShape(28.dp), color = Color(0xF21B1B1F), contentColor = Color.White) {
             Column(Modifier.padding(vertical = 12.dp)) {
                 Row(Modifier.padding(horizontal = 22.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
                     AppIcon(app.pkg, 40.dp)
@@ -722,7 +865,7 @@ fun AppRow(app: AppInfo, onClick: () -> Unit, onLongClick: () -> Unit, modifier:
     Row(
         modifier.fillMaxWidth()
             .pressable(onClick, onLongClick)
-            .padding(start = 22.dp, end = 52.dp, top = 9.dp, bottom = 9.dp),
+            .padding(start = 22.dp, end = 52.dp, top = st.pad.dp, bottom = st.pad.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         AppIconB(app.pkg, st.icon.dp)
@@ -863,116 +1006,4 @@ fun Chip(text: String, selected: Boolean, onClick: () -> Unit) {
             .combinedClickable(onClick = onClick)
             .padding(horizontal = 14.dp, vertical = 9.dp)
     ) { Text(text, fontSize = 14.sp, color = Color.White) }
-}
-
-@Composable
-private fun SectionTitle(t: String) =
-    Text(t, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = Accent, modifier = Modifier.padding(top = 6.dp))
-
-@Composable
-private fun SwitchRow(text: String, value: Boolean, onChange: (Boolean) -> Unit) {
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Text(text, Modifier.weight(1f), fontSize = 16.sp, color = Color.White)
-        Switch(value, onChange)
-    }
-}
-
-@Composable
-private fun SliderRow(text: String, value: Float, range: ClosedFloatingPointRange<Float>, onChange: (Float) -> Unit) {
-    Column {
-        Text(text, fontSize = 14.sp, color = Color.White.copy(0.8f))
-        Slider(value, onChange, valueRange = range)
-    }
-}
-
-@Composable
-fun SettingsDialog(vm: LauncherVM, onPickWallpaper: () -> Unit, onDismiss: () -> Unit) {
-    val ctx = LocalContext.current
-    Dialog(onDismissRequest = onDismiss) {
-        Surface(
-            shape = RoundedCornerShape(28.dp), color = Color(0xF21B1B1F), contentColor = Color.White,
-            modifier = Modifier.heightIn(max = 640.dp)
-        ) {
-            Column(
-                Modifier.verticalScroll(rememberScrollState()).padding(22.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                Text("Ajustes", fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
-
-                SectionTitle("COR DE DESTAQUE")
-                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    AccentColors.forEachIndexed { i, c ->
-                        Box(
-                            Modifier.size(34.dp).clip(CircleShape).background(c)
-                                .then(if (i == vm.accentIdx) Modifier.border(3.dp, Color.White, CircleShape) else Modifier)
-                                .combinedClickable(onClick = { vm.setAccent(i) })
-                        )
-                    }
-                }
-
-                SectionTitle("EFEITOS VISUAIS")
-                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Chip("Nenhum", vm.fxMode == 0) { vm.fxMode = 0; vm.saveSettings() }
-                    Chip("Partículas", vm.fxMode == 1) { vm.fxMode = 1; vm.saveSettings() }
-                    Chip("Aurora", vm.fxMode == 2) { vm.fxMode = 2; vm.saveSettings() }
-                    Chip("Ambos", vm.fxMode == 3) { vm.fxMode = 3; vm.saveSettings() }
-                }
-                SwitchRow("Profundidade ao rolar a lista", vm.edgeFx) { vm.edgeFx = it; vm.saveSettings() }
-
-                SectionTitle("INÍCIO")
-                SwitchRow("Relógio grande com saudação", vm.bigClock) { vm.bigClock = it; vm.saveSettings() }
-                SwitchRow("Atalhos rápidos (lanterna, Wi-Fi…)", vm.quickActions) { vm.quickActions = it; vm.saveSettings() }
-                SwitchRow("Relógio em 24 horas", vm.use24h) { vm.use24h = it; vm.saveSettings() }
-
-                SectionTitle("PAPEL DE PAREDE")
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Chip("Escolher imagem", vm.useCustomWallpaper) { onPickWallpaper() }
-                    Chip("Do sistema", !vm.useCustomWallpaper) { vm.useCustomWallpaper = false; vm.saveSettings() }
-                }
-                SliderRow("Escurecer fundo", vm.dim, 0f..0.85f) { vm.dim = it; vm.saveSettings() }
-                SliderRow("Desfoque (só com imagem própria, Android 12+)", vm.blur, 0f..25f) { vm.blur = it; vm.saveSettings() }
-
-                SectionTitle("TELA")
-                SwitchRow("Ocultar barra de status", vm.hideStatus) { vm.hideStatus = it; vm.saveSettings() }
-                SwitchRow("Ocultar barra de navegação", vm.hideNav) { vm.hideNav = it; vm.saveSettings() }
-
-                SectionTitle("LISTA DE APPS")
-                SwitchRow("Exibir em grade (4 colunas)", vm.gridMode) { vm.gridMode = it; vm.saveSettings() }
-                SwitchRow("Vibração ao usar a barra A–Z", vm.haptics) { vm.haptics = it; vm.saveSettings() }
-                SliderRow("Tamanho dos ícones", vm.iconSize, 40f..72f) { vm.iconSize = it; vm.saveSettings() }
-                SliderRow("Tamanho do texto", vm.textSize, 18f..32f) { vm.textSize = it; vm.saveSettings() }
-                SwitchRow("Selo NOVO em apps recém-instalados", vm.newBadge) { vm.newBadge = it; vm.saveSettings() }
-                Chip("Zerar “Mais usados”", false) { vm.resetUsage() }
-                Text("Formato dos ícones", fontSize = 14.sp, color = Color.White.copy(0.8f))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Chip("Original", vm.iconShape == 0) { vm.iconShape = 0; vm.saveSettings() }
-                    Chip("Redondo", vm.iconShape == 1) { vm.iconShape = 1; vm.saveSettings() }
-                    Chip("Arredondado", vm.iconShape == 2) { vm.iconShape = 2; vm.saveSettings() }
-                }
-
-                val hiddenApps = vm.apps.filter { it.pkg in vm.hidden }
-                if (hiddenApps.isNotEmpty()) {
-                    SectionTitle("APPS OCULTOS")
-                    hiddenApps.forEach { a ->
-                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                            AppIcon(a.pkg, 32.dp)
-                            Spacer(Modifier.width(12.dp))
-                            Text(a.label, Modifier.weight(1f), fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            TextButton({ vm.toggleHidden(a.pkg) }) { Text("Mostrar", color = Accent) }
-                        }
-                    }
-                }
-
-                SectionTitle("SISTEMA")
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Chip("Launcher padrão", false) {
-                        runCatching { ctx.startActivity(Intent(Settings.ACTION_HOME_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
-                    }
-                    Chip("Acesso às notificações", false) { openListenerSettings(ctx) }
-                }
-                Spacer(Modifier.height(4.dp))
-                TextButton(onDismiss, Modifier.align(Alignment.End)) { Text("Fechar", color = Accent) }
-            }
-        }
-    }
 }

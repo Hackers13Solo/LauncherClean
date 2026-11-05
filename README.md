@@ -8,6 +8,26 @@ Aba **Releases** (lado direito da página do repositório) → baixe `CleanLaunc
 Cada push na branch `main` gera uma nova Release automaticamente (GitHub Actions).
 O APK é assinado sempre com a mesma chave, então dá para instalar por cima da versão anterior.
 
+## Novidades da v1.2
+**Correções**
+- **Calculadora** nos atalhos rápidos agora abre em qualquer celular (procura o app certo pelo nome/pacote).
+- **Pastas** abrem no **centro** da tela, sem desfocar o fundo (todas as janelas do launcher foram refeitas assim).
+- **Aurora** refeita: faixas de luz onduladas e bem visíveis (verde, cor de destaque, azul e roxo).
+
+**Ajustes por categoria** (Aparência, Papel de parede, Efeitos visuais, Tela inicial, Lista de apps, Barras do sistema, Apps ocultos, Sistema e sobre).
+
+**Papel de parede** – no primeiro uso o launcher pergunta qual você quer:
+- **Buscar na web**: digite um personagem, filme ou qualquer coisa e ele traz **20 fotos** (filtro de foto + vertical).
+- **Opções do sistema**: **10 categorias** prontas (desenho, paisagem, natureza, anime, jogos, terror, Halloween, Natal, Páscoa e espaço).
+- Ou escolha da galeria. Dá para trocar depois em Ajustes ▸ Papel de parede.
+
+**5 novidades extras**
+1. **Neve e chuva** como novos efeitos de fundo (ligue quantos quiser).
+2. **Calculadora na busca**: digite `12*3+4` e veja o resultado (toque para copiar).
+3. **Cor de destaque automática** a partir do papel de parede.
+4. **Seu nome na saudação** ("Bom dia, Fulano").
+5. **Espaçamento da lista** ajustável, e opção de ocultar "Mais usados".
+
 ## Novidades da v1.1
 1. **Barra A–Z com todas as letras** (★ # A–Z), que se ajusta à altura da tela
 2. **Barra A–Z inteligente**: destaca a seção atual, esmaece letras sem apps e amplia as letras perto do dedo (lupa)

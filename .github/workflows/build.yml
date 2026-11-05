@@ -27,7 +27,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG="v1.1-build${{ github.run_number }}"
+          TAG="v1.2-build${{ github.run_number }}"
           gh release create "$TAG" CleanLauncher.apk \
             --target "$GITHUB_SHA" \
             --title "Clean Launcher $TAG" \

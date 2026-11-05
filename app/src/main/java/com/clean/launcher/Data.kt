@@ -18,8 +18,10 @@ import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.toArgb
 import androidx.core.content.ContextCompat
 import androidx.core.graphics.drawable.toBitmap
 import androidx.lifecycle.AndroidViewModel
@@ -109,7 +111,8 @@ class LauncherVM(private val app: Application) : AndroidViewModel(app) {
 
     // novidades da v1.1
     var accentIdx by mutableIntStateOf(prefs.getInt("accent", 0))
-    var fxMode by mutableIntStateOf(prefs.getInt("fx", 3))          // 0 nenhum, 1 partículas, 2 aurora, 3 ambos
+    // efeitos de fundo em bits: 1 partículas, 2 aurora, 4 neve, 8 chuva (3 = partículas + aurora, igual à v1.1)
+    var fxMask by mutableIntStateOf(prefs.getInt("fx", 3))
     var edgeFx by mutableStateOf(prefs.getBoolean("edgeFx", true))   // desvanece/encolhe linhas nas bordas
     var bigClock by mutableStateOf(prefs.getBoolean("bigClock", true))
     var quickActions by mutableStateOf(prefs.getBoolean("quick", true))
@@ -118,20 +121,72 @@ class LauncherVM(private val app: Application) : AndroidViewModel(app) {
     var textSize by mutableFloatStateOf(prefs.getFloat("textSize", 26f))
     var newBadge by mutableStateOf(prefs.getBoolean("newBadge", true))
 
+    // novidades da v1.2
+    var wpAsked by mutableStateOf(prefs.getBoolean("wpAsked2", false))   // já mostrou a tela de papel de parede?
+    var autoAccent by mutableStateOf(prefs.getBoolean("autoAccent", false))
+    var accentCustom by mutableIntStateOf(prefs.getInt("accentCustom", AccentColors[0].toArgb()))
+    var userName by mutableStateOf(prefs.getString("userName", "") ?: "")
+    var showMostUsed by mutableStateOf(prefs.getBoolean("showMostUsed", true))
+    var rowPad by mutableFloatStateOf(prefs.getFloat("rowPad", 9f))
+
     fun saveSettings() {
         prefs.edit()
             .putBoolean("customWp", useCustomWallpaper).putFloat("dim", dim).putFloat("blur", blur)
             .putBoolean("hideStatus", hideStatus).putBoolean("hideNav", hideNav)
             .putBoolean("grid", gridMode).putInt("shape", iconShape).putBoolean("haptics", haptics)
-            .putInt("accent", accentIdx).putInt("fx", fxMode).putBoolean("edgeFx", edgeFx)
+            .putInt("accent", accentIdx).putInt("fx", fxMask).putBoolean("edgeFx", edgeFx)
             .putBoolean("bigClock", bigClock).putBoolean("quick", quickActions).putBoolean("h24", use24h)
             .putFloat("iconSize", iconSize).putFloat("textSize", textSize).putBoolean("newBadge", newBadge)
+            .putBoolean("wpAsked2", wpAsked).putBoolean("autoAccent", autoAccent).putInt("accentCustom", accentCustom)
+            .putString("userName", userName).putBoolean("showMostUsed", showMostUsed).putFloat("rowPad", rowPad)
             .apply()
     }
 
+    fun markWpAsked() {
+        wpAsked = true
+        saveSettings()
+    }
+
+    /** Liga/desliga um efeito de fundo (bit) sem mexer nos outros. */
+    fun setFx(bit: Int, on: Boolean) {
+        fxMask = if (on) fxMask or bit else fxMask and bit.inv()
+        saveSettings()
+    }
+
+    /** Escolhe uma das cores prontas (desliga a cor automática). */
     fun setAccent(i: Int) {
         accentIdx = i.coerceIn(0, AccentColors.lastIndex)
         Accent = AccentColors[accentIdx]
+        autoAccent = false
+        saveSettings()
+    }
+
+    /** Cor própria (usada pela cor automática do papel de parede). */
+    private fun setCustomAccent(c: Color) {
+        accentIdx = -1
+        accentCustom = c.toArgb()
+        Accent = c
+        saveSettings()
+    }
+
+    /** Recalcula a cor de destaque a partir do papel de parede atual. */
+    fun refreshAutoAccent() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val f = File(app.filesDir, "wallpaper.jpg")
+            if (!f.exists()) return@launch
+            val opts = BitmapFactory.Options().apply { inSampleSize = 4 }
+            val bmp = BitmapFactory.decodeFile(f.path, opts) ?: return@launch
+            dominantAccent(bmp)?.let { setCustomAccent(it) }
+        }
+    }
+
+    /** Salva a imagem como papel de parede do launcher (chamar fora da thread principal). */
+    fun applyWallpaperBitmap(bmp: Bitmap) {
+        File(app.filesDir, "wallpaper.jpg").outputStream().use { bmp.compress(Bitmap.CompressFormat.JPEG, 92, it) }
+        useCustomWallpaper = true
+        wallpaperVersion++
+        wpAsked = true
+        if (autoAccent) dominantAccent(bmp)?.let { setCustomAccent(it) }
         saveSettings()
     }
 
@@ -150,14 +205,7 @@ class LauncherVM(private val app: Application) : AndroidViewModel(app) {
                 while (bounds.outWidth / sample > 2400 || bounds.outHeight / sample > 2400) sample *= 2
                 val opts = BitmapFactory.Options().apply { inSampleSize = sample }
                 val bmp = cr.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, opts) }
-                if (bmp != null) {
-                    File(app.filesDir, "wallpaper.jpg").outputStream().use {
-                        bmp.compress(Bitmap.CompressFormat.JPEG, 92, it)
-                    }
-                    useCustomWallpaper = true
-                    wallpaperVersion++
-                    saveSettings()
-                }
+                if (bmp != null) applyWallpaperBitmap(bmp)
             }
         }
     }
@@ -177,7 +225,7 @@ class LauncherVM(private val app: Application) : AndroidViewModel(app) {
     }
 
     init {
-        Accent = AccentColors[accentIdx.coerceIn(0, AccentColors.lastIndex)]
+        Accent = if (accentIdx in AccentColors.indices) AccentColors[accentIdx] else Color(accentCustom)
         loadPrefs()
         reload()
         val f = IntentFilter().apply {

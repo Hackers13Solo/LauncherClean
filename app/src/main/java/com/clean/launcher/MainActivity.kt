@@ -48,6 +48,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.widget.Toast
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
@@ -68,6 +72,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import kotlin.math.abs
+import kotlin.math.pow
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -134,6 +140,7 @@ fun LauncherScreen(vm: LauncherVM, media: MediaWatcher, onBars: () -> Unit) {
     var folderOptions by remember { mutableStateOf<String?>(null) }
     var newFolder by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
+    var showWp by remember { mutableStateOf(!vm.wpAsked) }   // 1º uso: pergunta o papel de parede
     var touched by remember { mutableStateOf<String?>(null) }
     var pull by remember { mutableFloatStateOf(0f) }
 
@@ -141,13 +148,17 @@ fun LauncherScreen(vm: LauncherVM, media: MediaWatcher, onBars: () -> Unit) {
     val open: (AppInfo) -> Unit = { vm.recordLaunch(it.pkg); launchApp(ctx, it) }
 
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
-        if (uri != null) vm.setWallpaper(uri)
+        if (uri != null) {
+            vm.setWallpaper(uri)
+            vm.markWpAsked()
+            showWp = false
+        }
     }
 
     LaunchedEffect(vm.hideStatus, vm.hideNav) { onBars() }
     LaunchedEffect(vm.homeTick) {
         if (vm.homeTick > 0) {
-            searching = false; openFolder = null; menuApp = null; folderOptions = null; showSettings = false
+            searching = false; openFolder = null; menuApp = null; folderOptions = null; showSettings = false; newFolder = false
             listState.animateScrollToItem(0)
         }
     }
@@ -218,8 +229,9 @@ fun LauncherScreen(vm: LauncherVM, media: MediaWatcher, onBars: () -> Unit) {
 
     CompositionLocalProvider(
         LocalIconShape provides vm.iconShape,
-        LocalListStyle provides ListStyle(vm.iconSize, vm.textSize, vm.newBadge)
+        LocalListStyle provides ListStyle(vm.iconSize, vm.textSize, vm.newBadge, vm.rowPad)
     ) {
+        Box(Modifier.fillMaxSize()) {
         BoxWithConstraints(Modifier.fillMaxSize()) {
             val screenHpx = with(density) { maxHeight.toPx() }
 
@@ -242,7 +254,7 @@ fun LauncherScreen(vm: LauncherVM, media: MediaWatcher, onBars: () -> Unit) {
                 )
             )
 
-            FxBackground(vm.fxMode)
+            FxBackground(vm.fxMask)
 
             if (searching) {
                 SearchScreen(visible, vm.usage, onLaunch = { searching = false; open(it) },
@@ -268,7 +280,7 @@ fun LauncherScreen(vm: LauncherVM, media: MediaWatcher, onBars: () -> Unit) {
                 ) {
                     item {
                         Column {
-                            if (vm.bigClock) ClockHeader(vm.use24h, date) { showSettings = true }
+                            if (vm.bigClock) ClockHeader(vm.use24h, date, vm.userName) { showSettings = true }
                             else Text(
                                 date, fontSize = 15.sp, color = Color.White.copy(0.75f),
                                 modifier = Modifier.padding(start = 24.dp, bottom = 10.dp)
@@ -286,8 +298,8 @@ fun LauncherScreen(vm: LauncherVM, media: MediaWatcher, onBars: () -> Unit) {
                                         onOptions = { folderOptions = it },
                                         onAdd = { newFolder = true }
                                     )
-                                    if (vm.quickActions) QuickActions()
-                                    if (topUsed.isNotEmpty())
+                                    if (vm.quickActions) QuickActions(vm.apps)
+                                    if (vm.showMostUsed && topUsed.isNotEmpty())
                                         MostUsedRow(topUsed, onClick = open, onLongClick = { menuApp = it })
                                 }
                                 SidePills(vm.use24h)
@@ -431,12 +443,25 @@ fun LauncherScreen(vm: LauncherVM, media: MediaWatcher, onBars: () -> Unit) {
             }
         }
 
-        // ---- diálogos
+        // ---- janelas (desenhadas no centro, dentro do launcher)
         menuApp?.let { AppMenuDialog(it, vm, null) { menuApp = null } }
         openFolder?.let { FolderDialog(vm, it, byPkg, open) { openFolder = null } }
         folderOptions?.let { FolderOptionsDialog(vm, it) { folderOptions = null } }
         if (newFolder) NameDialog("Nova pasta", "", { vm.createFolder(it); newFolder = false }, { newFolder = false })
-        if (showSettings) SettingsDialog(vm, onPickWallpaper = { picker.launch("image/*") }) { showSettings = false }
+
+        // ---- telas cheias: ajustes por categoria e escolha do papel de parede
+        if (showSettings) SettingsScreen(
+            vm,
+            onClose = { showSettings = false },
+            onChangeWallpaper = { showWp = true },
+            onGallery = { picker.launch("image/*") }
+        )
+        if (showWp) WallpaperSetup(
+            vm, firstRun = !vm.wpAsked,
+            onClose = { vm.markWpAsked(); showWp = false },
+            onGallery = { picker.launch("image/*") }
+        )
+        }
     }
 }
 
@@ -458,10 +483,30 @@ fun SearchScreen(
             .sortedBy { if (norm(it.label).startsWith(n)) 0 else 1 }
     }
     LaunchedEffect(Unit) { runCatching { focus.requestFocus() } }
+    val ctx = LocalContext.current
+    val calc = remember(q) { evalMath(q) }
 
     Column(Modifier.fillMaxSize().systemBarsPadding().imePadding()) {
         // melhor resultado fica colado no campo de busca (embaixo)
         LazyColumn(Modifier.weight(1f), reverseLayout = true) {
+            if (calc != null) item(key = "calc") {
+                val txt = formatMath(calc)
+                Row(
+                    Modifier.fillMaxWidth().clickable {
+                        val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                        cm.setPrimaryClip(ClipData.newPlainText("resultado", txt))
+                        Toast.makeText(ctx, "Resultado copiado", Toast.LENGTH_SHORT).show()
+                    }.padding(start = 22.dp, end = 22.dp, top = 14.dp, bottom = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text("=", fontSize = 30.sp, color = Accent, fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.width(18.dp))
+                    Column {
+                        Text(txt, fontSize = 30.sp, color = Color.White, fontWeight = FontWeight.Light)
+                        Text("Toque para copiar", fontSize = 12.sp, color = Color.White.copy(0.5f))
+                    }
+                }
+            }
             items(results, key = { it.pkg }) { a ->
                 AppRow(a, onClick = { onLaunch(a) }, onLongClick = { onLong(a) })
             }
@@ -498,3 +543,68 @@ fun SearchScreen(
         }
     }
 }
+
+
+// ------------------------------------------------------------ mini calculadora da busca
+private class MathParser(val s: String) {
+    var i = 0
+    private fun peek(): Char = if (i < s.length) s[i] else '\u0000'
+    fun expr(): Double {
+        var v = term()
+        while (peek() == '+' || peek() == '-') {
+            val o = s[i++]
+            val r = term()
+            v = if (o == '+') v + r else v - r
+        }
+        return v
+    }
+    private fun term(): Double {
+        var v = power()
+        while (peek() == '*' || peek() == '/') {
+            val o = s[i++]
+            val r = power()
+            v = if (o == '*') v * r else v / r
+        }
+        return v
+    }
+    private fun power(): Double {
+        val b = unary()
+        if (peek() == '^') { i++; return b.pow(power()) }
+        return b
+    }
+    private fun unary(): Double {
+        if (peek() == '-') { i++; return -unary() }
+        if (peek() == '+') { i++; return unary() }
+        return atom()
+    }
+    private fun atom(): Double {
+        if (peek() == '(') {
+            i++
+            val v = expr()
+            if (peek() != ')') throw IllegalArgumentException()
+            i++
+            return v
+        }
+        val st = i
+        while (peek().isDigit() || peek() == '.') i++
+        if (st == i) throw IllegalArgumentException()
+        return s.substring(st, i).toDouble()
+    }
+}
+
+/** Resolve contas digitadas na busca (ex.: 12*3+4, 2^10, (5+7)/3). Retorna null se não for uma conta. */
+fun evalMath(src: String): Double? {
+    val s = src.trim().replace(',', '.').replace('×', '*').replace('÷', '/')
+        .replace(Regex("(?<=[0-9)])\\s*[xX]\\s*(?=[0-9(])"), "*").replace(" ", "")
+    if (s.length < 3 || !Regex("[0-9+\\-*/^().]+").matches(s)) return null
+    if (!Regex("[+\\-*/^]").containsMatchIn(s.drop(1))) return null
+    return runCatching {
+        val p = MathParser(s)
+        val v = p.expr()
+        if (p.i != s.length || v.isNaN() || v.isInfinite()) null else v
+    }.getOrNull()
+}
+
+fun formatMath(v: Double): String =
+    if (abs(v) < 1e15 && v == v.toLong().toDouble()) v.toLong().toString()
+    else String.format(Locale("pt", "BR"), "%.8f", v).trimEnd('0').trimEnd(',')
