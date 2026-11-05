@@ -46,7 +46,10 @@ jobs:
           script: bash .github/demo/record.sh Lume.apk demo-raw.mp4
       - uses: actions/upload-artifact@v4
         if: always()
-        with: { name: demo-raw, path: demo-raw.mp4, if-no-files-found: warn }
+        with: { name: demo-raw, path: |
+            demo-raw.mp4
+            snaps
+          if-no-files-found: warn }
       - name: Publicar vídeo bruto em Releases
         if: always()
         env:
@@ -54,6 +57,6 @@ jobs:
         run: |
           [ -f demo-raw.mp4 ] || exit 0
           gh release delete demo-video --yes --cleanup-tag 2>/dev/null || true
-          gh release create demo-video demo-raw.mp4 Lume.apk \
+          gh release create demo-video demo-raw.mp4 Lume.apk $(ls snaps/* 2>/dev/null) \
             --title "Vídeo de demonstração (bruto)" \
             --notes "Gravação do emulador, antes da edição." --prerelease

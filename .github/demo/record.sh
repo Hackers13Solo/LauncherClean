@@ -29,6 +29,9 @@ sys.exit(1)
 PY
 }
 
+mkdir -p snaps
+snap() { adb exec-out screencap -p > "snaps/$1.png" 2>/dev/null; adb shell uiautomator dump /sdcard/u.xml >/dev/null 2>&1; adb pull /sdcard/u.xml "snaps/$1.xml" >/dev/null 2>&1; }
+
 W=$(adb shell wm size | grep -oE '[0-9]+x[0-9]+' | tail -1 | cut -dx -f1)
 H=$(adb shell wm size | grep -oE '[0-9]+x[0-9]+' | tail -1 | cut -dx -f2)
 echo "Tela: ${W}x${H}"
@@ -47,18 +50,30 @@ sleep 3
 
 # --- boas-vindas animadas ---
 sleep 4
+snap 00_boas_vindas
 tap_text "Vamos começar"; sleep 3
-tap_text "Seu nome" || adb shell input tap $((W/2)) $((H/3))
-sleep 1; adb shell input text "Visitante"; sleep 1
-adb shell input keyevent KEYCODE_BACK; sleep 1
-for i in 1 2 3 4 5 6 7 8; do
+# nome: foca o campo, digita e continua (sem BACK, que volta uma etapa)
+tap_text "Seu nome" || adb shell input tap $((W/2)) $((H/5))
+sleep 1.5
+adb shell input text "Visitante"; sleep 2
+snap 01_nome
+tap_text "Continuar"; sleep 3.5
+snap 02_apos_nome
+for i in $(seq 1 14); do
   if tap_text "Entrar no Lume"; then break; fi
-  tap_text "Continuar"; sleep 3.5
+  case $i in
+    1) tap_text "Grade" || true; sleep 2; tap_text "Compacto" || true; sleep 2; tap_text "Clássico" || true; sleep 1.5 ;;
+  esac
+  snap "03_etapa_$i"
+  tap_text "Continuar" || tap_text "Vamos começar" || true
+  sleep 3.5
 done
 sleep 5
+snap 04_entrou
 
 # --- tela inicial ---
 adb shell input keyevent KEYCODE_HOME; sleep 3
+snap 05_home
 
 # rolagem pela lista de apps
 for i in 1 2 3; do
@@ -75,7 +90,9 @@ adb shell input swipe $((W-14)) $((H*8/10)) $((W-14)) $((H*2/10)) 2500; sleep 2
 # busca com calculadora
 tap_text "Buscar" || adb shell input tap $((W/2)) $((H/10))
 sleep 2
+snap 06_busca
 adb shell "input text '12*3+4'"; sleep 4
+snap 07_calculo
 adb shell input keyevent KEYCODE_BACK; sleep 1
 adb shell input keyevent KEYCODE_BACK; sleep 1
 tap_text "Buscar" || true; sleep 1.5
