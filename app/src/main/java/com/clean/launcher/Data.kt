@@ -6,10 +6,14 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.net.Uri
 import android.provider.Settings
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -23,6 +27,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.File
 import java.text.Normalizer
 import java.util.concurrent.ConcurrentHashMap
 
@@ -84,6 +89,61 @@ class LauncherVM(private val app: Application) : AndroidViewModel(app) {
     val favorites = mutableStateListOf<String>()
     var homeTick by mutableIntStateOf(0)
 
+    // apps ocultos e contagem de uso ("mais usados")
+    val hidden = mutableStateListOf<String>()
+    val usage = mutableStateMapOf<String, Int>()
+
+    // ajustes
+    var useCustomWallpaper by mutableStateOf(prefs.getBoolean("customWp", false))
+    var wallpaperVersion by mutableIntStateOf(0)
+    var dim by mutableFloatStateOf(prefs.getFloat("dim", 0.35f))
+    var blur by mutableFloatStateOf(prefs.getFloat("blur", 0f))
+    var hideStatus by mutableStateOf(prefs.getBoolean("hideStatus", true))
+    var hideNav by mutableStateOf(prefs.getBoolean("hideNav", false))
+    var gridMode by mutableStateOf(prefs.getBoolean("grid", false))
+    var iconShape by mutableIntStateOf(prefs.getInt("shape", 0)) // 0 original, 1 redondo, 2 arredondado
+    var haptics by mutableStateOf(prefs.getBoolean("haptics", true))
+
+    fun saveSettings() {
+        prefs.edit()
+            .putBoolean("customWp", useCustomWallpaper).putFloat("dim", dim).putFloat("blur", blur)
+            .putBoolean("hideStatus", hideStatus).putBoolean("hideNav", hideNav)
+            .putBoolean("grid", gridMode).putInt("shape", iconShape).putBoolean("haptics", haptics)
+            .apply()
+    }
+
+    fun setWallpaper(uri: Uri) {
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching {
+                val cr = app.contentResolver
+                val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                cr.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
+                var sample = 1
+                while (bounds.outWidth / sample > 2400 || bounds.outHeight / sample > 2400) sample *= 2
+                val opts = BitmapFactory.Options().apply { inSampleSize = sample }
+                val bmp = cr.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, opts) }
+                if (bmp != null) {
+                    File(app.filesDir, "wallpaper.jpg").outputStream().use {
+                        bmp.compress(Bitmap.CompressFormat.JPEG, 92, it)
+                    }
+                    useCustomWallpaper = true
+                    wallpaperVersion++
+                    saveSettings()
+                }
+            }
+        }
+    }
+
+    fun recordLaunch(pkg: String) {
+        usage[pkg] = (usage[pkg] ?: 0) + 1
+        save()
+    }
+
+    fun toggleHidden(pkg: String) {
+        if (!hidden.remove(pkg)) hidden.add(pkg)
+        save()
+    }
+
     private val receiver = object : BroadcastReceiver() {
         override fun onReceive(c: Context?, i: Intent?) { IconCache.clear(); reload() }
     }
@@ -133,13 +193,24 @@ class LauncherVM(private val app: Application) : AndroidViewModel(app) {
             }
             val fav = JSONArray(prefs.getString("favs", "[]"))
             for (i in 0 until fav.length()) favorites.add(fav.getString(i))
+            val hid = JSONArray(prefs.getString("hidden", "[]"))
+            for (i in 0 until hid.length()) hidden.add(hid.getString(i))
+            val u = JSONObject(prefs.getString("usage", "{}"))
+            u.keys().forEach { k -> usage[k] = u.getInt(k) }
         }
     }
 
     private fun save() {
         val arr = JSONArray()
         folders.forEach { arr.put(JSONObject().put("name", it.name).put("apps", JSONArray(it.apps))) }
-        prefs.edit().putString("folders", arr.toString()).putString("favs", JSONArray(favorites.toList()).toString()).apply()
+        val u = JSONObject()
+        usage.forEach { (k, v) -> u.put(k, v) }
+        prefs.edit()
+            .putString("folders", arr.toString())
+            .putString("favs", JSONArray(favorites.toList()).toString())
+            .putString("hidden", JSONArray(hidden.toList()).toString())
+            .putString("usage", u.toString())
+            .apply()
     }
 
     // ---------- favoritos ----------

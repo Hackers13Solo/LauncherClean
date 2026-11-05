@@ -10,6 +10,7 @@ import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.graphics.ImageBitmap
@@ -19,14 +20,20 @@ import androidx.compose.ui.graphics.asImageBitmap
 class NotifListener : NotificationListenerService() {
     companion object {
         var count by mutableIntStateOf(0)
+        /** notificações por pacote, usadas nos selos (badges) dos ícones */
+        val counts = mutableStateMapOf<String, Int>()
     }
 
     private fun update() {
-        count = runCatching { activeNotifications.count { !it.isOngoing } }.getOrDefault(0)
+        val list = runCatching { activeNotifications.filter { !it.isOngoing } }.getOrDefault(emptyList())
+        count = list.size
+        val m = list.groupingBy { it.packageName }.eachCount()
+        counts.clear()
+        counts.putAll(m)
     }
 
     override fun onListenerConnected() = update()
-    override fun onListenerDisconnected() { count = 0 }
+    override fun onListenerDisconnected() { count = 0; counts.clear() }
     override fun onNotificationPosted(sbn: StatusBarNotification?) = update()
     override fun onNotificationRemoved(sbn: StatusBarNotification?) = update()
 }
