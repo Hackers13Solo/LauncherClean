@@ -51,8 +51,8 @@ fun renderSysWallpaper(w: Int, h: Int, id: Int): Bitmap {
 }
 
 // ------------------------------------------------------------ utilidades de desenho
-private fun DrawScope.sky(vararg c: Color) {
-    drawRect(Brush.verticalGradient(c.toList()))
+private fun DrawScope.sky(c1: Color, c2: Color, c3: Color? = null, c4: Color? = null) {
+    drawRect(Brush.verticalGradient(listOfNotNull(c1, c2, c3, c4)))
 }
 
 private fun DrawScope.glow(cx: Float, cy: Float, r: Float, c: Color) {
