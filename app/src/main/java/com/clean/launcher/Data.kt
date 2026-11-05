@@ -1,5 +1,6 @@
 package com.clean.launcher
 
+import android.app.ActivityOptions
 import android.app.Application
 import android.content.BroadcastReceiver
 import android.content.ComponentName
@@ -31,7 +32,7 @@ import java.io.File
 import java.text.Normalizer
 import java.util.concurrent.ConcurrentHashMap
 
-data class AppInfo(val label: String, val pkg: String, val component: ComponentName)
+data class AppInfo(val label: String, val pkg: String, val component: ComponentName, val installed: Long = 0L)
 data class Folder(val name: String, val apps: List<String>)
 
 fun norm(s: String): String =
@@ -49,10 +50,12 @@ object IconCache {
 
 fun launchApp(ctx: Context, app: AppInfo) {
     runCatching {
+        val anim = ActivityOptions.makeCustomAnimation(ctx, android.R.anim.fade_in, android.R.anim.fade_out)
         ctx.startActivity(
             Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
                 .setComponent(app.component)
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED),
+            anim.toBundle()
         )
     }
 }
@@ -104,12 +107,37 @@ class LauncherVM(private val app: Application) : AndroidViewModel(app) {
     var iconShape by mutableIntStateOf(prefs.getInt("shape", 0)) // 0 original, 1 redondo, 2 arredondado
     var haptics by mutableStateOf(prefs.getBoolean("haptics", true))
 
+    // novidades da v1.1
+    var accentIdx by mutableIntStateOf(prefs.getInt("accent", 0))
+    var fxMode by mutableIntStateOf(prefs.getInt("fx", 3))          // 0 nenhum, 1 partículas, 2 aurora, 3 ambos
+    var edgeFx by mutableStateOf(prefs.getBoolean("edgeFx", true))   // desvanece/encolhe linhas nas bordas
+    var bigClock by mutableStateOf(prefs.getBoolean("bigClock", true))
+    var quickActions by mutableStateOf(prefs.getBoolean("quick", true))
+    var use24h by mutableStateOf(prefs.getBoolean("h24", true))
+    var iconSize by mutableFloatStateOf(prefs.getFloat("iconSize", 52f))
+    var textSize by mutableFloatStateOf(prefs.getFloat("textSize", 26f))
+    var newBadge by mutableStateOf(prefs.getBoolean("newBadge", true))
+
     fun saveSettings() {
         prefs.edit()
             .putBoolean("customWp", useCustomWallpaper).putFloat("dim", dim).putFloat("blur", blur)
             .putBoolean("hideStatus", hideStatus).putBoolean("hideNav", hideNav)
             .putBoolean("grid", gridMode).putInt("shape", iconShape).putBoolean("haptics", haptics)
+            .putInt("accent", accentIdx).putInt("fx", fxMode).putBoolean("edgeFx", edgeFx)
+            .putBoolean("bigClock", bigClock).putBoolean("quick", quickActions).putBoolean("h24", use24h)
+            .putFloat("iconSize", iconSize).putFloat("textSize", textSize).putBoolean("newBadge", newBadge)
             .apply()
+    }
+
+    fun setAccent(i: Int) {
+        accentIdx = i.coerceIn(0, AccentColors.lastIndex)
+        Accent = AccentColors[accentIdx]
+        saveSettings()
+    }
+
+    fun resetUsage() {
+        usage.clear()
+        save()
     }
 
     fun setWallpaper(uri: Uri) {
@@ -149,6 +177,7 @@ class LauncherVM(private val app: Application) : AndroidViewModel(app) {
     }
 
     init {
+        Accent = AccentColors[accentIdx.coerceIn(0, AccentColors.lastIndex)]
         loadPrefs()
         reload()
         val f = IntentFilter().apply {
@@ -170,10 +199,12 @@ class LauncherVM(private val app: Application) : AndroidViewModel(app) {
             val i = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
             apps = pm.queryIntentActivities(i, 0)
                 .map {
+                    val pkg = it.activityInfo.packageName
                     AppInfo(
                         it.loadLabel(pm).toString(),
-                        it.activityInfo.packageName,
-                        ComponentName(it.activityInfo.packageName, it.activityInfo.name)
+                        pkg,
+                        ComponentName(pkg, it.activityInfo.name),
+                        runCatching { pm.getPackageInfo(pkg, 0).firstInstallTime }.getOrDefault(0L)
                     )
                 }
                 .filter { it.pkg != app.packageName }

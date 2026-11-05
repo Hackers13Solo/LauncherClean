@@ -1,7 +1,12 @@
 name: Build APK
 on:
   push:
+    branches: [main]
   workflow_dispatch:
+
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -12,7 +17,19 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with: { gradle-version: 8.9 }
       - run: gradle assembleRelease --no-daemon
+      - name: Nomear o APK
+        run: cp app/build/outputs/apk/release/*.apk CleanLauncher.apk
       - uses: actions/upload-artifact@v4
         with:
           name: CleanLauncher-apk
-          path: app/build/outputs/apk/release/*.apk
+          path: CleanLauncher.apk
+      - name: Publicar na aba Releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="v1.1-build${{ github.run_number }}"
+          gh release create "$TAG" CleanLauncher.apk \
+            --target "$GITHUB_SHA" \
+            --title "Clean Launcher $TAG" \
+            --notes "APK gerado automaticamente. Baixe o arquivo CleanLauncher.apk abaixo, abra no celular e instale." \
+            --latest

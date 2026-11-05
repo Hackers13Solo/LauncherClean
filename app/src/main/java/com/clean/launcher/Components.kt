@@ -6,11 +6,20 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.hardware.camera2.CameraCharacteristics
+import android.hardware.camera2.CameraManager
 import android.media.AudioManager
+import android.provider.MediaStore
 import android.os.BatteryManager
 import android.provider.AlarmClock
 import android.provider.Settings
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
@@ -23,6 +32,7 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -35,7 +45,12 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
@@ -64,9 +79,23 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.Date
+import java.util.Calendar
 import java.util.Locale
+import kotlin.math.abs
+import kotlin.math.exp
+import kotlin.math.sin
 
-val Accent = Color(0xFFFF4D4D)
+val AccentColors = listOf(
+    Color(0xFFFF4D4D), Color(0xFFFF7A18), Color(0xFFFFC107), Color(0xFF2ECC71),
+    Color(0xFF00E5FF), Color(0xFF4D8DFF), Color(0xFFB36BFF), Color(0xFFFF4DA6)
+)
+
+/** Cor de destaque (mutável: muda em tempo real nos Ajustes). */
+var Accent by mutableStateOf(AccentColors[0])
+
+/** Tamanhos e opções da lista de apps, compartilhados via CompositionLocal. */
+data class ListStyle(val icon: Float = 52f, val text: Float = 26f, val showNew: Boolean = true)
+val LocalListStyle = compositionLocalOf { ListStyle() }
 val GlassFill = Color.White.copy(alpha = 0.12f)
 val GlassBorder = Color.White.copy(alpha = 0.16f)
 
@@ -80,7 +109,9 @@ fun Glass(
     content: @Composable BoxScope.() -> Unit
 ) {
     val shape = RoundedCornerShape(radius)
-    var m = modifier.clip(shape).background(GlassFill).border(1.dp, GlassBorder, shape)
+    var m = modifier.clip(shape)
+        .background(Brush.verticalGradient(listOf(Color.White.copy(0.18f), Color.White.copy(0.07f))))
+        .border(1.dp, Brush.linearGradient(listOf(Color.White.copy(0.40f), Color.White.copy(0.05f), Color.White.copy(0.20f))), shape)
     if (onClick != null || onLongClick != null)
         m = m.combinedClickable(onClick = { onClick?.invoke() }, onLongClick = onLongClick)
     Box(m, content = content)
@@ -139,7 +170,172 @@ fun Modifier.pressable(onClick: () -> Unit, onLongClick: (() -> Unit)? = null): 
     )
 }
 
+/** Linhas perto do topo/rodapé da tela desvanecem e encolhem um pouco (efeito de profundidade). */
+fun Modifier.edgeFx(state: LazyListState, index: Int, enabled: Boolean): Modifier =
+    if (!enabled) this else this.graphicsLayer {
+        val info = state.layoutInfo
+        val v = info.visibleItemsInfo.firstOrNull { x -> x.index == index }
+        if (v != null) {
+            val vh = (info.viewportEndOffset - info.viewportStartOffset).toFloat().coerceAtLeast(1f)
+            val c = v.offset + v.size / 2f
+            val d = ((c - vh / 2f) / (vh / 2f)).coerceIn(-1f, 1f)
+            val k = ((abs(d) - 0.6f) / 0.4f).coerceIn(0f, 1f)
+            alpha = 1f - 0.6f * k
+            val sc = 1f - 0.09f * k
+            scaleX = sc; scaleY = sc
+            transformOrigin = TransformOrigin(0.1f, 0.5f)
+        }
+    }
+
+// ------------------------------------------------------------ Fundo animado
+private class Particle(
+    val x: Float, val y: Float, val r: Float,
+    val loops: Int, val sway: Int, val tw: Int, val ph: Float
+)
+
+/** Partículas flutuantes + aurora em movimento, desenhadas por cima do papel de parede. */
+@Composable
+fun FxBackground(mode: Int, modifier: Modifier = Modifier) {
+    if (mode == 0) return
+    val tr = rememberInfiniteTransition(label = "fx")
+    val t by tr.animateFloat(0f, 1f, infiniteRepeatable(tween(60000, easing = LinearEasing)), label = "t")
+    val parts = remember {
+        val rnd = java.util.Random(7)
+        List(48) {
+            Particle(
+                rnd.nextFloat(), rnd.nextFloat(), 1.2f + rnd.nextFloat() * 3.0f,
+                2 + rnd.nextInt(7), 1 + rnd.nextInt(4), 6 + rnd.nextInt(15), rnd.nextFloat() * 6.2831855f
+            )
+        }
+    }
+    val tau = 6.2831855f
+    androidx.compose.foundation.Canvas(modifier.fillMaxSize()) {
+        val w = size.width
+        val h = size.height
+        if (mode == 2 || mode == 3) {
+            val a = t * tau * 2f
+            fun blob(cx: Float, cy: Float, rad: Float, c: Color) = drawCircle(
+                Brush.radialGradient(listOf(c, Color.Transparent), center = Offset(cx, cy), radius = rad),
+                radius = rad, center = Offset(cx, cy)
+            )
+            blob(w * (0.25f + 0.20f * sin(a)), h * (0.22f + 0.10f * sin(a + 1.5f)), w * 0.95f, Accent.copy(0.30f))
+            blob(w * (0.82f + 0.12f * sin(a + 2f)), h * (0.55f + 0.14f * sin(a + 0.7f)), w * 0.85f, Color(0xFF3D5AFE).copy(0.20f))
+            blob(w * (0.40f + 0.20f * sin(a + 4f)), h * (0.92f + 0.05f * sin(a + 3f)), w * 0.95f, Color(0xFF00E5FF).copy(0.14f))
+        }
+        if (mode == 1 || mode == 3) {
+            val dn = density
+            parts.forEach { p ->
+                val yy = (((p.y - t * p.loops) % 1f) + 1f) % 1f
+                val xx = p.x + sin(t * tau * p.sway + p.ph) * 0.03f
+                val tw = 0.5f + 0.5f * sin(t * tau * p.tw + p.ph)
+                val c = Offset(xx * w, yy * h)
+                val edge = minOf(yy, 1f - yy).coerceAtMost(0.15f) / 0.15f   // some nas pontas
+                val al = (0.20f + 0.55f * tw) * edge
+                drawCircle(Accent.copy(al * 0.35f), p.r * dn * 2.4f, c)
+                drawCircle(Color.White.copy(al), p.r * dn * 0.8f, c)
+            }
+        }
+    }
+}
+
+// ------------------------------------------------------------ Relógio grande
+@Composable
+fun ClockHeader(use24h: Boolean, date: String, onLong: () -> Unit) {
+    val ctx = LocalContext.current
+    val now by produceState(System.currentTimeMillis()) {
+        while (true) { value = System.currentTimeMillis(); delay(1000) }
+    }
+    val cal = remember(now / 1000) { Calendar.getInstance().apply { timeInMillis = now } }
+    val h24 = cal.get(Calendar.HOUR_OF_DAY)
+    val hh = if (use24h) h24 else (if (h24 % 12 == 0) 12 else h24 % 12)
+    val mm = cal.get(Calendar.MINUTE)
+    val greeting = when (h24) { in 5..11 -> "Bom dia"; in 12..17 -> "Boa tarde"; else -> "Boa noite" }
+    val tr = rememberInfiniteTransition(label = "colon")
+    val colonA by tr.animateFloat(1f, 0.15f, infiniteRepeatable(tween(900), RepeatMode.Reverse), label = "c")
+    Column(
+        Modifier.padding(start = 24.dp, bottom = 12.dp).combinedClickable(
+            onClick = {
+                runCatching { ctx.startActivity(Intent(AlarmClock.ACTION_SHOW_ALARMS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+            },
+            onLongClick = onLong
+        )
+    ) {
+        Row(verticalAlignment = Alignment.Bottom) {
+            Text("%02d".format(hh), fontSize = 64.sp, fontWeight = FontWeight.ExtraLight, color = Color.White)
+            Text(":", fontSize = 64.sp, fontWeight = FontWeight.ExtraLight, color = Accent.copy(alpha = colonA))
+            Text("%02d".format(mm), fontSize = 64.sp, fontWeight = FontWeight.ExtraLight, color = Color.White)
+            if (!use24h) Text(
+                if (h24 < 12) " AM" else " PM", fontSize = 18.sp, color = Color.White.copy(0.6f),
+                modifier = Modifier.padding(bottom = 14.dp)
+            )
+        }
+        Text("$greeting  •  $date", fontSize = 15.sp, color = Color.White.copy(0.78f))
+    }
+}
+
+// ------------------------------------------------------------ Atalhos rápidos
+@Composable
+private fun QuickBtn(icon: androidx.compose.ui.graphics.vector.ImageVector, active: Boolean, onClick: () -> Unit) {
+    Box(
+        Modifier.size(42.dp).clip(CircleShape)
+            .background(if (active) Accent.copy(0.92f) else GlassFill)
+            .border(1.dp, GlassBorder, CircleShape)
+            .pressable(onClick),
+        contentAlignment = Alignment.Center
+    ) { Icon(icon, null, tint = Color.White, modifier = Modifier.size(21.dp)) }
+}
+
+@Composable
+fun QuickActions() {
+    val ctx = LocalContext.current
+    val cm = remember { ctx.getSystemService(Context.CAMERA_SERVICE) as CameraManager }
+    val camId = remember {
+        runCatching {
+            cm.cameraIdList.firstOrNull { cm.getCameraCharacteristics(it).get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true }
+        }.getOrNull()
+    }
+    var torch by remember { mutableStateOf(false) }
+    DisposableEffect(camId) {
+        val cb = object : CameraManager.TorchCallback() {
+            override fun onTorchModeChanged(cameraId: String, enabled: Boolean) {
+                if (cameraId == camId) torch = enabled
+            }
+        }
+        runCatching { cm.registerTorchCallback(cb, null) }
+        onDispose { runCatching { cm.unregisterTorchCallback(cb) } }
+    }
+    fun go(i: Intent) { runCatching { ctx.startActivity(i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) } }
+    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        QuickBtn(Icons.Rounded.FlashOn, torch) { camId?.let { id -> runCatching { cm.setTorchMode(id, !torch) } } }
+        QuickBtn(Icons.Rounded.Wifi, false) { go(Intent(Settings.ACTION_WIFI_SETTINGS)) }
+        QuickBtn(Icons.Rounded.Bluetooth, false) { go(Intent(Settings.ACTION_BLUETOOTH_SETTINGS)) }
+        QuickBtn(Icons.Rounded.PhotoCamera, false) { go(Intent(MediaStore.INTENT_ACTION_STILL_IMAGE_CAMERA)) }
+        QuickBtn(Icons.Rounded.Calculate, false) {
+            go(Intent.makeMainSelectorActivity(Intent.ACTION_MAIN, Intent.CATEGORY_APP_CALCULATOR))
+        }
+    }
+}
+
 // ------------------------------------------------------------ Música
+@Composable
+fun Equalizer(playing: Boolean, modifier: Modifier = Modifier) {
+    val tr = rememberInfiniteTransition(label = "eq")
+    val b0 by tr.animateFloat(0.25f, 1f, infiniteRepeatable(tween(420, easing = LinearEasing), RepeatMode.Reverse), label = "b0")
+    val b1 by tr.animateFloat(0.25f, 1f, infiniteRepeatable(tween(560, easing = LinearEasing), RepeatMode.Reverse), label = "b1")
+    val b2 by tr.animateFloat(0.25f, 1f, infiniteRepeatable(tween(700, easing = LinearEasing), RepeatMode.Reverse), label = "b2")
+    val b3 by tr.animateFloat(0.25f, 1f, infiniteRepeatable(tween(490, easing = LinearEasing), RepeatMode.Reverse), label = "b3")
+    androidx.compose.foundation.Canvas(modifier) {
+        val gap = 3.dp.toPx()
+        val bw = (size.width - gap * 3) / 4f
+        listOf(b0, b1, b2, b3).forEachIndexed { i, v ->
+            val hgt = size.height * (if (playing) v else 0.2f)
+            drawRoundRect(
+                Accent, Offset(i * (bw + gap), size.height - hgt), Size(bw, hgt), CornerRadius(bw / 2f)
+            )
+        }
+    }
+}
+
 @Composable
 fun MusicCard(media: MediaWatcher) {
     val ctx = LocalContext.current
@@ -175,6 +371,11 @@ fun MusicCard(media: MediaWatcher) {
                 }
             }
         } else {
+            if (info.art != null)
+                Image(
+                    info.art, null, Modifier.fillMaxSize().blur(28.dp).alpha(0.38f),
+                    contentScale = ContentScale.Crop
+                )
             Column(Modifier.fillMaxSize().padding(18.dp), verticalArrangement = Arrangement.SpaceBetween) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(
@@ -213,6 +414,7 @@ fun MusicCard(media: MediaWatcher) {
                     }
                 }
             }
+            Equalizer(info.playing, Modifier.align(Alignment.TopEnd).padding(16.dp).size(width = 24.dp, height = 18.dp))
         }
     }
 }
@@ -239,7 +441,7 @@ private fun rememberBattery(): IntState {
 }
 
 @Composable
-fun SidePills() {
+fun SidePills(use24h: Boolean = true) {
     val ctx = LocalContext.current
     val battery = rememberBattery().intValue
     val am = remember { ctx.getSystemService(Context.AUDIO_SERVICE) as AudioManager }
@@ -250,12 +452,14 @@ fun SidePills() {
             delay(400)
         }
     }
-    val hhmm by produceState(SimpleDateFormat("HH mm", Locale.getDefault()).format(Date())) {
-        val f = SimpleDateFormat("HH mm", Locale.getDefault())
+    val pattern = if (use24h) "HH mm" else "hh mm"
+    val hhmm by produceState(SimpleDateFormat(pattern, Locale.getDefault()).format(Date()), use24h) {
+        val f = SimpleDateFormat(pattern, Locale.getDefault())
         while (true) { value = f.format(Date()); delay(10_000) }
     }
     val parts = hhmm.split(" ")
     val low = battery <= 15
+    val ringColor = when { battery <= 15 -> Color(0xFFFF5252); battery <= 40 -> Color(0xFFFFC107); else -> Color(0xFF4CAF50) }
 
     Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
         // bateria (toque abre o uso de bateria)
@@ -271,7 +475,9 @@ fun SidePills() {
                     val tl = Offset(sw / 2, sw / 2)
                     val sz = Size(size.width - sw, size.height - sw)
                     drawArc(Color.White.copy(0.2f), 0f, 360f, false, tl, sz, style = Stroke(sw))
-                    drawArc(if (low) Accent else Color.White, -90f, 360f * battery / 100f, false, tl, sz,
+                    drawArc(ringColor.copy(0.28f), -90f, 360f * battery / 100f, false, tl, sz,
+                        style = Stroke(sw * 2.2f, cap = StrokeCap.Round))
+                    drawArc(ringColor, -90f, 360f * battery / 100f, false, tl, sz,
                         style = Stroke(sw, cap = StrokeCap.Round))
                 }
                 Text("$battery", fontSize = 12.sp, color = Color.White, fontWeight = FontWeight.Medium)
@@ -499,18 +705,31 @@ fun AppMenuDialog(app: AppInfo, vm: LauncherVM, fromFolder: String?, onDismiss: 
 }
 
 // ------------------------------------------------------------ Lista
+fun isNewApp(app: AppInfo): Boolean =
+    app.installed > 0L && System.currentTimeMillis() - app.installed < 3L * 24 * 3600 * 1000
+
 @Composable
-fun AppRow(app: AppInfo, onClick: () -> Unit, onLongClick: () -> Unit) {
+fun NewTag() {
+    Box(
+        Modifier.padding(start = 10.dp).clip(RoundedCornerShape(50)).background(Accent)
+            .padding(horizontal = 7.dp, vertical = 2.dp)
+    ) { Text("NOVO", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color.White) }
+}
+
+@Composable
+fun AppRow(app: AppInfo, onClick: () -> Unit, onLongClick: () -> Unit, modifier: Modifier = Modifier) {
+    val st = LocalListStyle.current
     Row(
-        Modifier.fillMaxWidth()
+        modifier.fillMaxWidth()
             .pressable(onClick, onLongClick)
             .padding(start = 22.dp, end = 52.dp, top = 9.dp, bottom = 9.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        AppIconB(app.pkg, 52.dp)
+        AppIconB(app.pkg, st.icon.dp)
         Spacer(Modifier.width(20.dp))
-        Text(app.label, fontSize = 26.sp, fontWeight = FontWeight.Light, color = Color.White,
-            maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(app.label, fontSize = st.text.sp, fontWeight = FontWeight.Light, color = Color.White,
+            maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
+        if (st.showNew && isNewApp(app)) NewTag()
     }
 }
 
@@ -541,33 +760,40 @@ fun MostUsedRow(apps: List<AppInfo>, onClick: (AppInfo) -> Unit, onLongClick: (A
 }
 
 /**
- * Barra alfabética. Quando não há espaço (altura por letra < 14dp) mostra uma letra sim, outra não.
+ * Barra alfabética com TODAS as letras: o tamanho da fonte se ajusta à altura disponível.
+ * Letra da seção atual fica na cor de destaque, letras sem apps ficam esmaecidas
+ * e as letras perto do dedo crescem (efeito lupa).
  */
 @Composable
 fun AlphaBar(
     letters: List<String>,
+    present: Set<String>,
+    current: String?,
     width: Dp,
     height: Dp,
-    fontSize: TextUnit,
     haptics: Boolean,
     onSelect: (String) -> Unit,
     onActive: (String?) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val step = if (height / letters.size < 14.dp) 2 else 1
-    val shown = remember(letters, step) { letters.filterIndexed { i, _ -> i % step == 0 || i == letters.lastIndex } }
-    val shownNow by rememberUpdatedState(shown)
+    val n = letters.size
+    val density = LocalDensity.current
     var h by remember { mutableIntStateOf(1) }
     var last by remember { mutableStateOf<String?>(null) }
+    var touchY by remember { mutableStateOf<Float?>(null) }
     val select by rememberUpdatedState(onSelect)
     val active by rememberUpdatedState(onActive)
     val hapticOn by rememberUpdatedState(haptics)
     val haptic = LocalHapticFeedback.current
 
+    val slotPx = with(density) { (height - 8.dp).toPx() } / n
+    val fsPx = minOf(slotPx * 0.62f, with(density) { 17.sp.toPx() })
+    val fs = with(density) { fsPx.toSp() }
+
     fun at(y: Float) {
-        val list = shownNow
-        val i = (y / h * list.size).toInt().coerceIn(0, list.lastIndex)
-        val l = list[i]
+        touchY = y
+        val i = (y / h * n).toInt().coerceIn(0, n - 1)
+        val l = letters[i]
         if (l != last) {
             last = l
             if (hapticOn) haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
@@ -575,7 +801,7 @@ fun AlphaBar(
             active(l)
         }
     }
-    fun end() { last = null; active(null) }
+    fun end() { last = null; touchY = null; active(null) }
 
     Glass(
         modifier.size(width, height).onSizeChanged { h = it.height.coerceAtLeast(1) }
@@ -592,13 +818,37 @@ fun AlphaBar(
         radius = width / 2
     ) {
         Column(
-            Modifier.fillMaxSize().padding(vertical = 6.dp),
-            verticalArrangement = Arrangement.SpaceEvenly,
+            Modifier.fillMaxSize().padding(vertical = 4.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            shown.forEach {
-                Text(it, fontSize = fontSize, fontWeight = FontWeight.Medium,
-                    color = if (it == "★") Color(0xFFFFC107) else Color.White)
+            letters.forEachIndexed { i, l ->
+                val has = l in present || l == "★"
+                val isCur = l == current
+                Box(
+                    Modifier.weight(1f).fillMaxWidth().graphicsLayer {
+                        val ty = touchY
+                        var sc = 1f
+                        if (ty != null) {
+                            val yc = (i + 0.5f) * h / n
+                            val d = (ty - yc) / (h.toFloat() / n)
+                            sc = 1f + 0.9f * exp(-(d * d) / 5f)
+                        } else if (isCur) sc = 1.25f
+                        scaleX = sc; scaleY = sc
+                    },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        l, fontSize = fs, lineHeight = fs,
+                        fontWeight = if (isCur) FontWeight.Bold else FontWeight.Medium,
+                        maxLines = 1, softWrap = false,
+                        color = when {
+                            l == "★" -> Color(0xFFFFC107)
+                            isCur -> Accent
+                            has -> Color.White
+                            else -> Color.White.copy(0.28f)
+                        }
+                    )
+                }
             }
         }
     }
@@ -649,6 +899,31 @@ fun SettingsDialog(vm: LauncherVM, onPickWallpaper: () -> Unit, onDismiss: () ->
             ) {
                 Text("Ajustes", fontSize = 22.sp, fontWeight = FontWeight.SemiBold)
 
+                SectionTitle("COR DE DESTAQUE")
+                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    AccentColors.forEachIndexed { i, c ->
+                        Box(
+                            Modifier.size(34.dp).clip(CircleShape).background(c)
+                                .then(if (i == vm.accentIdx) Modifier.border(3.dp, Color.White, CircleShape) else Modifier)
+                                .combinedClickable(onClick = { vm.setAccent(i) })
+                        )
+                    }
+                }
+
+                SectionTitle("EFEITOS VISUAIS")
+                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Chip("Nenhum", vm.fxMode == 0) { vm.fxMode = 0; vm.saveSettings() }
+                    Chip("Partículas", vm.fxMode == 1) { vm.fxMode = 1; vm.saveSettings() }
+                    Chip("Aurora", vm.fxMode == 2) { vm.fxMode = 2; vm.saveSettings() }
+                    Chip("Ambos", vm.fxMode == 3) { vm.fxMode = 3; vm.saveSettings() }
+                }
+                SwitchRow("Profundidade ao rolar a lista", vm.edgeFx) { vm.edgeFx = it; vm.saveSettings() }
+
+                SectionTitle("INÍCIO")
+                SwitchRow("Relógio grande com saudação", vm.bigClock) { vm.bigClock = it; vm.saveSettings() }
+                SwitchRow("Atalhos rápidos (lanterna, Wi-Fi…)", vm.quickActions) { vm.quickActions = it; vm.saveSettings() }
+                SwitchRow("Relógio em 24 horas", vm.use24h) { vm.use24h = it; vm.saveSettings() }
+
                 SectionTitle("PAPEL DE PAREDE")
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Chip("Escolher imagem", vm.useCustomWallpaper) { onPickWallpaper() }
@@ -664,6 +939,10 @@ fun SettingsDialog(vm: LauncherVM, onPickWallpaper: () -> Unit, onDismiss: () ->
                 SectionTitle("LISTA DE APPS")
                 SwitchRow("Exibir em grade (4 colunas)", vm.gridMode) { vm.gridMode = it; vm.saveSettings() }
                 SwitchRow("Vibração ao usar a barra A–Z", vm.haptics) { vm.haptics = it; vm.saveSettings() }
+                SliderRow("Tamanho dos ícones", vm.iconSize, 40f..72f) { vm.iconSize = it; vm.saveSettings() }
+                SliderRow("Tamanho do texto", vm.textSize, 18f..32f) { vm.textSize = it; vm.saveSettings() }
+                SwitchRow("Selo NOVO em apps recém-instalados", vm.newBadge) { vm.newBadge = it; vm.saveSettings() }
+                Chip("Zerar “Mais usados”", false) { vm.resetUsage() }
                 Text("Formato dos ícones", fontSize = 14.sp, color = Color.White.copy(0.8f))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Chip("Original", vm.iconShape == 0) { vm.iconShape = 0; vm.saveSettings() }

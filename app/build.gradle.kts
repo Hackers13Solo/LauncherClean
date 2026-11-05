@@ -11,15 +11,24 @@ android {
         applicationId = "com.clean.launcher"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 2
+        versionName = "1.1"
+    }
+
+    // chave fixa: todo APK novo é assinado igual, então dá para atualizar por cima sem desinstalar
+    signingConfigs {
+        create("fixa") {
+            storeFile = file("launcher.keystore")
+            storePassword = "cleanlauncher"
+            keyAlias = "launcher"
+            keyPassword = "cleanlauncher"
+        }
     }
 
     buildTypes {
         release {
             isMinifyEnabled = false
-            // assinado com a chave debug para ser instalável direto
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.getByName("fixa")
         }
     }
     compileOptions {

@@ -1,23 +1,31 @@
 # Clean Launcher
 
-Launcher Android (Kotlin + Jetpack Compose) inspirado no layout enviado:
-widget de música, pastas fixas no topo, lista de apps A–Z com barra alfabética, busca e pílulas (bateria, hora, notificações).
+Launcher Android (Kotlin + Jetpack Compose): widget de música, pastas, lista de apps A–Z com barra alfabética,
+busca, pílulas (bateria, hora, volume) e muitos efeitos visuais.
 
-## Como gerar o APK
+## Baixar o APK
+Aba **Releases** (lado direito da página do repositório) → baixe `CleanLauncher.apk` da versão mais recente.
+Cada push na branch `main` gera uma nova Release automaticamente (GitHub Actions).
+O APK é assinado sempre com a mesma chave, então dá para instalar por cima da versão anterior.
 
-### Opção A — Android Studio
-1. Abra a pasta `CleanLauncher` no Android Studio (Koala ou mais novo).
-2. Aguarde o Gradle sincronizar → **Build ▸ Build APK(s)**.
-3. O APK fica em `app/build/outputs/apk/`.
+## Novidades da v1.1
+1. **Barra A–Z com todas as letras** (★ # A–Z), que se ajusta à altura da tela
+2. **Barra A–Z inteligente**: destaca a seção atual, esmaece letras sem apps e amplia as letras perto do dedo (lupa)
+3. **Fundo animado**: partículas flutuantes e aurora em movimento (Ajustes ▸ Efeitos visuais)
+4. **Cores de destaque**: 8 temas, troca em tempo real
+5. **Relógio grande com saudação** (bom dia/tarde/noite), 24h ou 12h
+6. **Atalhos rápidos**: lanterna, Wi-Fi, Bluetooth, câmera e calculadora
+7. **Tamanho dos ícones e do texto** ajustáveis
+8. **Selo NOVO** em apps instalados nos últimos 3 dias
+9. **Busca melhorada**: mais usados perto do campo e opção "Pesquisar na web"
+10. **Profundidade ao rolar** (linhas das bordas desvanecem e encolhem) + animação ao abrir apps
 
-### Opção B — GitHub (sem instalar nada)
-1. Crie um repositório e envie estes arquivos.
-2. Aba **Actions ▸ Build APK** → quando terminar, baixe `CleanLauncher-apk` em *Artifacts*.
+Também: capa do álbum desfocada e equalizador animado no player, anel de bateria colorido por nível,
+vidro com borda em gradiente e balão de letra animado.
 
 ## Primeiro uso
 - Instale o APK, aperte o botão Home e escolha **Clean Launcher ▸ Sempre**.
-- Toque no widget de música e ative **Clean Launcher** em *Acesso a notificações*
-  (necessário para mostrar a música tocando e o contador de notificações).
-- Segure um app na lista → Favoritar / Adicionar à pasta / Info / Desinstalar.
+- Toque no widget de música e ative **Clean Launcher** em *Acesso a notificações*.
+- Segure um app na lista → Favoritar / Adicionar à pasta / Ocultar / Info / Desinstalar.
 - Toque no **+** ao lado das pastas para criar uma.
-- O fundo é o papel de parede do sistema.
+- Segure a data/relógio ou toque na engrenagem para abrir os **Ajustes**.

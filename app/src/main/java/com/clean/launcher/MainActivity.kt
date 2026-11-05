@@ -5,6 +5,7 @@ package com.clean.launcher
 import android.content.Intent
 import android.graphics.BitmapFactory
 import android.graphics.Color as AColor
+import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
@@ -20,6 +21,7 @@ import androidx.compose.animation.core.spring
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -37,6 +39,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
@@ -213,7 +216,10 @@ fun LauncherScreen(vm: LauncherVM, media: MediaWatcher, onBars: () -> Unit) {
         }
     }
 
-    CompositionLocalProvider(LocalIconShape provides vm.iconShape) {
+    CompositionLocalProvider(
+        LocalIconShape provides vm.iconShape,
+        LocalListStyle provides ListStyle(vm.iconSize, vm.textSize, vm.newBadge)
+    ) {
         BoxWithConstraints(Modifier.fillMaxSize()) {
             val screenHpx = with(density) { maxHeight.toPx() }
 
@@ -236,9 +242,20 @@ fun LauncherScreen(vm: LauncherVM, media: MediaWatcher, onBars: () -> Unit) {
                 )
             )
 
+            FxBackground(vm.fxMode)
+
             if (searching) {
-                SearchScreen(visible, onLaunch = { searching = false; open(it) },
-                    onClose = { searching = false }, onLong = { menuApp = it })
+                SearchScreen(visible, vm.usage, onLaunch = { searching = false; open(it) },
+                    onClose = { searching = false }, onLong = { menuApp = it },
+                    onWeb = { q ->
+                        searching = false
+                        runCatching {
+                            ctx.startActivity(
+                                Intent(Intent.ACTION_VIEW, Uri.parse("https://www.google.com/search?q=" + Uri.encode(q)))
+                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            )
+                        }
+                    })
             } else {
                 val bars = WindowInsets.systemBars.union(WindowInsets.displayCutout).asPaddingValues()
                 val topPad = maxOf(bars.calculateTopPadding(), 24.dp) + 8.dp
@@ -251,7 +268,8 @@ fun LauncherScreen(vm: LauncherVM, media: MediaWatcher, onBars: () -> Unit) {
                 ) {
                     item {
                         Column {
-                            Text(
+                            if (vm.bigClock) ClockHeader(vm.use24h, date) { showSettings = true }
+                            else Text(
                                 date, fontSize = 15.sp, color = Color.White.copy(0.75f),
                                 modifier = Modifier.padding(start = 24.dp, bottom = 10.dp)
                                     .combinedClickable(onClick = {}, onLongClick = { showSettings = true })
@@ -268,16 +286,17 @@ fun LauncherScreen(vm: LauncherVM, media: MediaWatcher, onBars: () -> Unit) {
                                         onOptions = { folderOptions = it },
                                         onAdd = { newFolder = true }
                                     )
+                                    if (vm.quickActions) QuickActions()
                                     if (topUsed.isNotEmpty())
                                         MostUsedRow(topUsed, onClick = open, onLongClick = { menuApp = it })
                                 }
-                                SidePills()
+                                SidePills(vm.use24h)
                             }
                         }
                     }
                     item {
                         Text(
-                            "Todos os apps", fontSize = 18.sp, color = Color.White.copy(0.85f),
+                            "Todos os apps (${visible.size})", fontSize = 18.sp, color = Color.White.copy(0.85f),
                             modifier = Modifier.padding(start = 22.dp, top = 26.dp, bottom = 6.dp)
                                 .combinedClickable(onClick = {}, onLongClick = { showSettings = true })
                         )
@@ -285,12 +304,17 @@ fun LauncherScreen(vm: LauncherVM, media: MediaWatcher, onBars: () -> Unit) {
                     items(entries.size) { i ->
                         when (val e = entries[i]) {
                             is Entry.Head -> Text(
-                                e.key, fontSize = 17.sp, color = Color.White.copy(0.55f),
-                                modifier = Modifier.padding(start = 24.dp, top = 18.dp, bottom = 2.dp)
+                                e.key, fontSize = 18.sp, fontWeight = FontWeight.Bold, color = Accent.copy(0.9f),
+                                modifier = Modifier.edgeFx(listState, i + 2, vm.edgeFx)
+                                    .padding(start = 24.dp, top = 18.dp, bottom = 2.dp)
                             )
-                            is Entry.Item -> AppRow(e.app, onClick = { open(e.app) }, onLongClick = { menuApp = e.app })
+                            is Entry.Item -> AppRow(
+                                e.app, onClick = { open(e.app) }, onLongClick = { menuApp = e.app },
+                                modifier = Modifier.edgeFx(listState, i + 2, vm.edgeFx)
+                            )
                             is Entry.Cells -> Row(
-                                Modifier.fillMaxWidth().padding(start = 12.dp, end = 52.dp, top = 6.dp, bottom = 6.dp)
+                                Modifier.fillMaxWidth().edgeFx(listState, i + 2, vm.edgeFx)
+                                    .padding(start = 12.dp, end = 52.dp, top = 6.dp, bottom = 6.dp)
                             ) {
                                 e.apps.forEach { a -> AppCell(a, onClick = { open(a) }, onLongClick = { menuApp = a }) }
                                 repeat(4 - e.apps.size) { Spacer(Modifier.weight(1f)) }
@@ -320,19 +344,42 @@ fun LauncherScreen(vm: LauncherVM, media: MediaWatcher, onBars: () -> Unit) {
                 }
                 val t by animateFloatAsState(progress, spring(stiffness = Spring.StiffnessMediumLow), label = "bar")
 
-                val restMax = with(density) { 364.dp.toPx() }
-                val restAvail = (screenHpx - headerBottom - with(density) { 126.dp.toPx() })
-                    .coerceIn(with(density) { 170.dp.toPx() }, restMax)
-                val expanded = minOf(screenHpx * 0.72f, with(density) { 640.dp.toPx() })
+                // letra da seção que está no topo da lista (destaque na barra)
+                val currentLetter by remember(entries) {
+                    derivedStateOf {
+                        val ei = listState.firstVisibleItemIndex - 2
+                        if (ei < 0 || entries.isEmpty()) null
+                        else {
+                            var k = ei.coerceAtMost(entries.lastIndex)
+                            var r: String? = null
+                            while (k >= 0) {
+                                val en = entries[k]
+                                if (en is Entry.Head) { r = en.key; break }
+                                k--
+                            }
+                            r
+                        }
+                    }
+                }
+
+                // a barra sempre mostra as 28 letras; só muda de tamanho
+                val bottomReserve = with(density) { (bottomPad + 100.dp).toPx() }
+                val restMin = with(density) { (9.dp * letters.size).toPx() }
+                val restMax = with(density) { 392.dp.toPx() }
+                val restAvail = (screenHpx - headerBottom - bottomReserve).coerceIn(restMin, restMax)
+                val expanded = minOf(
+                    screenHpx * 0.74f, with(density) { 600.dp.toPx() }, screenHpx - 2f * bottomReserve
+                ).coerceAtLeast(restMin)
                 val barHpx = restAvail + (expanded - restAvail) * t
                 val centerTop = (screenHpx - barHpx) / 2f
                 val topPx = maxOf(headerBottom + with(density) { 8.dp.toPx() }, centerTop)
 
                 AlphaBar(
                     letters,
+                    present = headIndex.keys,
+                    current = currentLetter,
                     width = lerp(30.dp, 42.dp, t),
                     height = with(density) { barHpx.toDp() },
-                    fontSize = lerp(9.sp, 15.sp, t),
                     haptics = vm.haptics,
                     onSelect = { l ->
                         val from = letters.indexOf(l)
@@ -346,12 +393,22 @@ fun LauncherScreen(vm: LauncherVM, media: MediaWatcher, onBars: () -> Unit) {
                 )
 
                 // balão com a letra enquanto você arrasta
-                touched?.let {
+                var lastTouched by remember { mutableStateOf("A") }
+                LaunchedEffect(touched) { touched?.let { lastTouched = it } }
+                val bubble by animateFloatAsState(
+                    if (touched != null) 1f else 0f,
+                    spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium),
+                    label = "bubble"
+                )
+                if (bubble > 0.01f) {
                     Box(
                         Modifier.align(Alignment.CenterEnd).padding(end = 92.dp).size(80.dp)
-                            .clip(CircleShape).background(Accent.copy(alpha = 0.88f)),
+                            .graphicsLayer { scaleX = bubble; scaleY = bubble; alpha = bubble.coerceIn(0f, 1f) }
+                            .drawBehind { drawCircle(Accent.copy(alpha = 0.30f), radius = size.minDimension * 0.78f) }
+                            .clip(CircleShape)
+                            .background(Brush.radialGradient(listOf(Accent, Accent.copy(alpha = 0.72f)))),
                         contentAlignment = Alignment.Center
-                    ) { Text(it, fontSize = 36.sp, fontWeight = FontWeight.Bold, color = Color.White) }
+                    ) { Text(lastTouched, fontSize = 36.sp, fontWeight = FontWeight.Bold, color = Color.White) }
                 }
 
                 // ajustes + busca
@@ -384,12 +441,19 @@ fun LauncherScreen(vm: LauncherVM, media: MediaWatcher, onBars: () -> Unit) {
 }
 
 @Composable
-fun SearchScreen(apps: List<AppInfo>, onLaunch: (AppInfo) -> Unit, onClose: () -> Unit, onLong: (AppInfo) -> Unit) {
+fun SearchScreen(
+    apps: List<AppInfo>,
+    usage: Map<String, Int>,
+    onLaunch: (AppInfo) -> Unit,
+    onClose: () -> Unit,
+    onLong: (AppInfo) -> Unit,
+    onWeb: (String) -> Unit
+) {
     var q by remember { mutableStateOf("") }
     val focus = remember { FocusRequester() }
     val results = remember(q, apps) {
         val n = norm(q.trim())
-        if (n.isEmpty()) apps
+        if (n.isEmpty()) apps.sortedByDescending { usage[it.pkg] ?: 0 }   // mais usados ficam perto do campo
         else apps.filter { norm(it.label).contains(n) }
             .sortedBy { if (norm(it.label).startsWith(n)) 0 else 1 }
     }
@@ -401,6 +465,18 @@ fun SearchScreen(apps: List<AppInfo>, onLaunch: (AppInfo) -> Unit, onClose: () -
             items(results, key = { it.pkg }) { a ->
                 AppRow(a, onClick = { onLaunch(a) }, onLongClick = { onLong(a) })
             }
+            if (q.isNotBlank()) item(key = "web") {
+                Row(
+                    Modifier.fillMaxWidth().clickable { onWeb(q.trim()) }
+                        .padding(start = 22.dp, end = 22.dp, top = 14.dp, bottom = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(Icons.Rounded.Search, null, tint = Accent, modifier = Modifier.size(30.dp))
+                    Spacer(Modifier.width(18.dp))
+                    Text("Pesquisar “${q.trim()}” na web", fontSize = 18.sp, color = Color.White.copy(0.9f),
+                        maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+                }
+            }
         }
         Glass(Modifier.fillMaxWidth().padding(16.dp), radius = 30.dp) {
             TextField(
@@ -409,7 +485,10 @@ fun SearchScreen(apps: List<AppInfo>, onLaunch: (AppInfo) -> Unit, onClose: () -
                 placeholder = { Text("Buscar apps…", color = Color.White.copy(0.5f)) },
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
-                keyboardActions = KeyboardActions(onGo = { results.firstOrNull()?.let(onLaunch) }),
+                keyboardActions = KeyboardActions(onGo = {
+                    val first = results.firstOrNull()
+                    if (first != null) onLaunch(first) else if (q.isNotBlank()) onWeb(q.trim())
+                }),
                 colors = TextFieldDefaults.colors(
                     focusedContainerColor = Color.Transparent, unfocusedContainerColor = Color.Transparent,
                     focusedIndicatorColor = Color.Transparent, unfocusedIndicatorColor = Color.Transparent,
