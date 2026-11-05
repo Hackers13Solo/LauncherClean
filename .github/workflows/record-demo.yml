@@ -46,10 +46,12 @@ jobs:
           script: bash .github/demo/record.sh Lume.apk demo-raw.mp4
       - uses: actions/upload-artifact@v4
         if: always()
-        with: { name: demo-raw, path: |
+        with:
+          name: demo-raw
+          path: |
             demo-raw.mp4
             snaps
-          if-no-files-found: warn }
+          if-no-files-found: warn
       - name: Publicar vídeo bruto em Releases
         if: always()
         env:
