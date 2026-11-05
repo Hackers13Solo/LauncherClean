@@ -25,85 +25,69 @@ adb shell input keyevent KEYCODE_HOME
 sleep 5
 
 # --- começa a gravar (limite do screenrecord: 180 s) ---
-adb shell "screenrecord --bit-rate 12000000 --time-limit 170 /sdcard/demo.mp4" &
+adb shell "screenrecord --bit-rate 12000000 --time-limit 178 /sdcard/demo.mp4" &
 REC=$!
 sleep 6
 snap 00_boas_vindas
 
 # Etapa 0: boas-vindas
-tapf $BTN_X $BTN_Y; sleep 3.2
+tapf $BTN_X $BTN_Y; sleep 2.6
 
-# Etapa 1: nome
-tapf 500 295; sleep 1.5
-adb shell input text "Visitante"; sleep 2
+# Etapa 1: nome (teclas, mais confiável que "input text"); com o teclado aberto o botão sobe
+tapf 500 295; sleep 1.2
+adb shell input keyevent KEYCODE_A KEYCODE_N KEYCODE_A; sleep 1.5
 snap 01_nome
-hide_kb; sleep 1
-tapf $BTN_X $BTN_Y; sleep 3.2
+tapf 500 583; sleep 2.6
 
-# Etapa 2: layout (toca em Grade e volta ao Clássico)
-tapf 630 375; sleep 2
-snap 02_layout
-tapf 240 375; sleep 1.5
-tapf $BTN_X $BTN_Y; sleep 3.2
+# Etapa 2: layout (Grade e volta ao Clássico)
+tapf 630 375; sleep 1.6
+tapf 240 375; sleep 1.0
+tapf $BTN_X $BTN_Y; sleep 2.6
 
-# Etapa 3: cor de destaque e formato dos ícones
-tapf 310 258; sleep 1.3     # laranja
-tapf 310 335; sleep 1.3     # azul
-tapf 480 335; sleep 1.3     # roxo
-tapf 650 335; sleep 1.5     # rosa
-snap 03_cor
-tapf $BTN_X $BTN_Y; sleep 3.2
+# Etapa 3: cor de destaque
+tapf 310 258; sleep 0.9
+tapf 310 335; sleep 0.9
+tapf 480 335; sleep 0.9
+tapf 650 335; sleep 1.2
+tapf $BTN_X $BTN_Y; sleep 2.6
 
-# Etapa 4: efeitos de fundo (liga Neve e Aurora)
-tapf 840 375; sleep 1.5
-tapf 840 565; sleep 2
+# Etapa 4: efeitos (liga Neve e Aurora)
+tapf 840 375; sleep 1.2
+tapf 840 565; sleep 1.8
 snap 04_efeitos
-tapf $BTN_X $BTN_Y; sleep 3.2
+tapf $BTN_X $BTN_Y; sleep 2.6
 
-# Etapa 5: papel de parede (pula)  |  Etapa 6: últimos ajustes
-tapf $BTN_X $BTN_Y; sleep 2.5
-tapf $BTN_X $BTN_Y; sleep 2.5
-snap 05_ultimos
-# Etapa 7: final
-tapf $BTN_X $BTN_Y; sleep 3
-snap 06_confete
-tapf $BTN_X $BTN_Y; sleep 5
-
-# --- tela inicial ---
-adb shell input keyevent KEYCODE_HOME; sleep 3
-snap 07_home
+# Etapa 5: papel de parede (pula) | Etapa 6: últimos ajustes
+tapf $BTN_X $BTN_Y; sleep 2.0
+tapf $BTN_X $BTN_Y; sleep 3.2     # chega na etapa final (confete)
+snap 05_confete
+tapf $BTN_X $BTN_Y; sleep 4       # "Entrar no Lume" -> tela inicial
+snap 06_home
 
 # rolagem pela lista de apps
-for i in 1 2 3; do swipef 500 700 500 300 450; sleep 1.4; done
-snap 08_lista
-for i in 1 2 3; do swipef 500 300 500 700 450; sleep 1.2; done
+for i in 1 2; do swipef 500 700 500 300 450; sleep 1.2; done
+for i in 1 2; do swipef 500 300 500 700 450; sleep 1.0; done
 
 # barra alfabética A–Z (borda direita): desce e sobe
-swipef 950 575 950 860 2500; sleep 1.5
-snap 09_az
-swipef 950 860 950 575 2500; sleep 1.5
+swipef 950 575 950 860 2200; sleep 1.2
+snap 07_az
+swipef 950 860 950 575 2200; sleep 1.2
 
 # busca com calculadora
-tapf 878 917; sleep 2.5
-snap 10_busca
-adb shell "input text '12*3+4'"; sleep 4
-snap 11_calculo
-adb shell input keyevent KEYCODE_DEL; adb shell input keyevent KEYCODE_DEL
-adb shell input keyevent KEYCODE_DEL; adb shell input keyevent KEYCODE_DEL
-adb shell input keyevent KEYCODE_DEL; adb shell input keyevent KEYCODE_DEL
-adb shell input text "chrome"; sleep 3
-snap 12_busca_app
-hide_kb; sleep 1
-adb shell input keyevent KEYCODE_HOME; sleep 3
+tapf 878 917; sleep 2.2
+adb shell "input text '12*3+4'"; sleep 3.5
+snap 08_calculo
+adb shell input keyevent KEYCODE_BACK; sleep 0.8
+adb shell input keyevent KEYCODE_HOME; sleep 2.5
 
 # ajustes (engrenagem)
 tapf 717 917; sleep 3
-snap 13_ajustes
+snap 09_ajustes
 swipef 500 700 500 300 500; sleep 1.5
 swipef 500 300 500 700 500; sleep 1.5
 adb shell input keyevent KEYCODE_BACK; sleep 2
-adb shell input keyevent KEYCODE_HOME; sleep 4
-snap 14_final
+adb shell input keyevent KEYCODE_HOME; sleep 3
+snap 10_final
 
 # --- para a gravação ---
 adb shell pkill -2 screenrecord || true
