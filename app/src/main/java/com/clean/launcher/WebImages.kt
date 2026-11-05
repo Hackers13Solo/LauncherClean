@@ -34,7 +34,7 @@ import java.net.URL
 import java.net.URLEncoder
 
 /** Uma foto encontrada na web: miniatura (rápida) e imagem em tamanho completo. */
-data class WebImg(val thumb: String, val full: String)
+data class WebImg(val thumb: String, val full: String, val w: Int = 0, val h: Int = 0)
 
 /**
  * Busca de fotos na web sem chave de API. Tenta várias fontes em sequência:
@@ -98,7 +98,7 @@ object WebImages {
     // ---- Bing Imagens: qft = só fotos + orientação vertical
     private fun bing(q: String): List<WebImg> {
         val url = "https://www.bing.com/images/async?q=${enc(q)}&first=0&count=70&mmasync=1&adlt=strict" +
-            "&qft=+filterui:photo-photo+filterui:aspect-tall"
+            "&qft=+filterui:photo-photo+filterui:aspect-tall+filterui:imagesize-large"
         val html = getText(url, "https://www.bing.com/")
         val out = ArrayList<WebImg>()
         Regex("\\sm=\"(\\{[^\"]*\\})\"").findAll(html).forEach { m ->
@@ -119,7 +119,7 @@ object WebImages {
         val home = getText("https://duckduckgo.com/?q=${enc(q)}&iax=images&ia=images")
         val vqd = Regex("vqd=[\"']?([0-9-]+)").find(home)?.groupValues?.get(1)
             ?: throw IOException("sem token")
-        val f = enc(",,,type:photo,layout:Tall,")
+        val f = enc(",size:Large,,type:photo,layout:Tall,")
         val json = getText(
             "https://duckduckgo.com/i.js?l=wt-wt&o=json&q=${enc(q)}&vqd=$vqd&f=$f&p=1",
             "https://duckduckgo.com/"
@@ -130,7 +130,8 @@ object WebImages {
             val o = arr.getJSONObject(i)
             val full = o.optString("image")
             val th = o.optString("thumbnail").ifBlank { full }
-            if (full.startsWith("http") && looksLikePhoto(full)) out.add(WebImg(secure(th), secure(full)))
+            if (full.startsWith("http") && looksLikePhoto(full))
+                out.add(WebImg(secure(th), secure(full), o.optInt("width"), o.optInt("height")))
         }
         return out
     }
@@ -146,29 +147,41 @@ object WebImages {
             val o = arr.getJSONObject(i)
             val full = o.optString("url")
             val th = o.optString("thumbnail").ifBlank { full }
-            if (full.startsWith("http") && looksLikePhoto(full)) out.add(WebImg(secure(th), secure(full)))
+            if (full.startsWith("http") && looksLikePhoto(full))
+                out.add(WebImg(secure(th), secure(full), o.optInt("width"), o.optInt("height")))
         }
         return out
     }
 
-    /** Até 20 fotos para o termo digitado. Lança exceção se nenhuma fonte responder. */
-    fun search(q: String): List<WebImg> {
+    /** Resolução mínima aceita (lado menor) quando a fonte informa o tamanho. */
+    private const val MIN_SIDE = 720
+
+    private fun qualityOk(i: WebImg): Boolean = i.w == 0 || i.h == 0 || minOf(i.w, i.h) >= MIN_SIDE
+
+    /**
+     * Até 20 fotos em alta resolução para o termo digitado (`extra` ajusta o termo, ex.: "wallpaper 4k").
+     * Lança exceção se nenhuma fonte responder.
+     */
+    fun search(q: String, extra: String = "wallpaper 4k"): List<WebImg> {
         val all = ArrayList<WebImg>()
         var lastError: Throwable? = null
         val sources: List<() -> List<WebImg>> = listOf(
-            { bing("$q wallpaper") },
-            { ddg("$q wallpaper") },
+            { bing("$q $extra") },
+            { ddg("$q $extra") },
             { openverse(q) }
         )
         for (s in sources) {
             try {
-                all.addAll(s())
+                all.addAll(s().filter { qualityOk(it) })
             } catch (e: Throwable) {
                 lastError = e
             }
-            if (all.distinctBy { it.full }.size >= 20) break
+            if (all.distinctBy { it.full }.size >= 30) break
         }
-        val list = all.distinctBy { it.full }.take(20)
+        // maiores primeiro (quando a fonte informa o tamanho); as sem informação mantêm a ordem
+        val list = all.distinctBy { it.full }
+            .sortedByDescending { if (it.w > 0 && it.h > 0) minOf(it.w, it.h) else 1080 }
+            .take(20)
         if (list.isEmpty() && lastError != null) throw lastError
         return list
     }
@@ -194,17 +207,22 @@ object NetCache {
 suspend fun loadThumb(url: String): ImageBitmap? = withContext(Dispatchers.IO) {
     NetCache.get(url) ?: runCatching {
         val bytes = WebImages.getBytes(url, 6_000_000)
-        decodeSampled(bytes, 720)?.asImageBitmap()
+        decodeSampled(bytes, 1000)?.asImageBitmap()
     }.getOrNull()?.also { NetCache.put(url, it) }
 }
 
-/** Baixa a foto em tamanho completo; se falhar, usa a miniatura como plano B. */
+/** Baixa a foto em tamanho completo (até 3000 px). Não usa mais a miniatura: se for pequena demais, retorna null. */
 suspend fun downloadWallpaper(img: WebImg): Bitmap? = withContext(Dispatchers.IO) {
-    for (u in listOf(img.full, img.thumb)) {
-        val bmp = runCatching { decodeSampled(WebImages.getBytes(u, 30_000_000), 2400) }.getOrNull()
-        if (bmp != null && minOf(bmp.width, bmp.height) >= 200) return@withContext bmp
-    }
-    null
+    val bmp = runCatching { decodeSampled(WebImages.getBytes(img.full, 40_000_000), 3000) }.getOrNull()
+    if (bmp != null && minOf(bmp.width, bmp.height) >= 600) bmp else null
+}
+
+/** Pré-visualização em boa qualidade (até 1600 px). Cai na miniatura só para exibir enquanto carrega. */
+suspend fun loadPreview(url: String): ImageBitmap? = withContext(Dispatchers.IO) {
+    NetCache.get("p:$url") ?: runCatching {
+        val bytes = WebImages.getBytes(url, 25_000_000)
+        decodeSampled(bytes, 1600)?.asImageBitmap()
+    }.getOrNull()?.also { NetCache.put("p:$url", it) }
 }
 
 @Composable

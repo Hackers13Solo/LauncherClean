@@ -6,6 +6,11 @@ import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Canvas
+import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.ColorMatrix
+import androidx.compose.ui.graphics.Paint
+import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Path
@@ -23,29 +28,33 @@ import kotlin.math.pow
 import kotlin.math.sin
 import kotlin.random.Random
 
-class SysWp(val id: Int, val title: String, val emoji: String)
+/** hues: deslocamento de matiz (graus) das opções 3 e 4; query: termo usado para buscar fotos da categoria na web. */
+class SysWp(val id: Int, val title: String, val emoji: String, val query: String, val hues: List<Float>)
+
+/** Quantas artes prontas cada categoria tem (opção 1 = original, 2 = espelhada, 3 e 4 = outras cores). */
+const val SYS_VARIANTS = 4
 
 /** As 10 categorias de papel de parede que acompanham o launcher (desenhadas por código, sem internet). */
 val SysWallpapers = listOf(
-    SysWp(0, "Desenho", "🎨"),
-    SysWp(1, "Paisagem", "🌄"),
-    SysWp(2, "Natureza", "🌿"),
-    SysWp(3, "Anime", "🌸"),
-    SysWp(4, "Jogos", "🎮"),
-    SysWp(5, "Terror", "🕯️"),
-    SysWp(6, "Halloween", "🎃"),
-    SysWp(7, "Natal", "🎄"),
-    SysWp(8, "Páscoa", "🐰"),
-    SysWp(9, "Espaço", "🪐")
+    SysWp(0, "Desenho", "🎨", "cartoon illustration", listOf(40f, -60f)),
+    SysWp(1, "Paisagem", "🌄", "landscape scenery", listOf(60f, -70f)),
+    SysWp(2, "Natureza", "🌿", "nature forest", listOf(70f, -50f)),
+    SysWp(3, "Anime", "🌸", "anime art", listOf(100f, -60f)),
+    SysWp(4, "Jogos", "🎮", "gaming neon", listOf(90f, -90f)),
+    SysWp(5, "Terror", "🕯️", "horror dark", listOf(200f, 100f)),
+    SysWp(6, "Halloween", "🎃", "halloween", listOf(90f, -40f)),
+    SysWp(7, "Natal", "🎄", "christmas", listOf(25f, -30f)),
+    SysWp(8, "Páscoa", "🐰", "easter", listOf(120f, -90f)),
+    SysWp(9, "Espaço", "🪐", "space galaxy", listOf(90f, -80f))
 )
 
 private const val TAU = 6.2831855f
 
-fun renderSysWallpaper(w: Int, h: Int, id: Int): Bitmap {
+fun renderSysWallpaper(w: Int, h: Int, id: Int, variant: Int = 0): Bitmap {
     val img = ImageBitmap(w, h)
     val canvas = Canvas(img)
     CanvasDrawScope().draw(Density(1f), LayoutDirection.Ltr, canvas, Size(w.toFloat(), h.toFloat())) {
-        drawSysWallpaper(id)
+        drawSysWallpaper(id, variant)
     }
     return img.asAndroidBitmap()
 }
@@ -165,8 +174,44 @@ private fun DrawScope.egg(cx: Float, cy: Float, r: Float, c1: Color, c2: Color) 
     }
 }
 
+// ------------------------------------------------------------ variações
+private fun hueMatrix(deg: Float): ColorMatrix {
+    val r = deg * 3.1415927f / 180f
+    val c = cos(r)
+    val n = sin(r)
+    return ColorMatrix(
+        floatArrayOf(
+            0.213f + c * 0.787f - n * 0.213f, 0.715f - c * 0.715f - n * 0.715f, 0.072f - c * 0.072f + n * 0.928f, 0f, 0f,
+            0.213f - c * 0.213f + n * 0.143f, 0.715f + c * 0.285f + n * 0.140f, 0.072f - c * 0.072f - n * 0.283f, 0f, 0f,
+            0.213f - c * 0.213f - n * 0.787f, 0.715f - c * 0.715f + n * 0.715f, 0.072f + c * 0.928f + n * 0.072f, 0f, 0f,
+            0f, 0f, 0f, 1f, 0f
+        )
+    )
+}
+
+/**
+ * Desenha a arte da categoria `id`. variant 0 = original, 1 = espelhada,
+ * 2 = outras cores (matiz A), 3 = espelhada + outras cores (matiz B).
+ */
+fun DrawScope.drawSysWallpaper(id: Int, variant: Int = 0) {
+    if (variant <= 0) { drawSysBase(id); return }
+    val hues = SysWallpapers.getOrNull(id)?.hues ?: emptyList()
+    val flip = variant == 1 || variant == 3
+    val hue = when (variant) { 2 -> hues.getOrElse(0) { 40f }; 3 -> hues.getOrElse(1) { -50f }; else -> 0f }
+    val w = size.width
+    val h = size.height
+    drawIntoCanvas { canvas ->
+        val paint = Paint()
+        if (hue != 0f) paint.colorFilter = ColorFilter.colorMatrix(hueMatrix(hue))
+        canvas.saveLayer(Rect(0f, 0f, w, h), paint)
+        if (flip) withTransform({ scale(-1f, 1f, Offset(w / 2f, h / 2f)) }) { drawSysBase(id) }
+        else drawSysBase(id)
+        canvas.restore()
+    }
+}
+
 // ------------------------------------------------------------ as 10 artes
-fun DrawScope.drawSysWallpaper(id: Int) {
+private fun DrawScope.drawSysBase(id: Int) {
     val w = size.width
     val h = size.height
     when (id) {

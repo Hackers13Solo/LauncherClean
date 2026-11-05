@@ -698,7 +698,7 @@ fun CenterOverlay(onDismiss: () -> Unit, content: @Composable BoxScope.() -> Uni
         Modifier.fillMaxSize()
             .background(Color.Black.copy(alpha = 0.55f * a))
             .pointerInput(Unit) { detectTapGestures { onDismiss() } }
-            .systemBarsPadding().imePadding().padding(24.dp),
+            .systemBarsPadding().displayCutoutPadding().imePadding().padding(24.dp),
         contentAlignment = Alignment.Center
     ) {
         Box(
@@ -877,14 +877,14 @@ fun AppRow(app: AppInfo, onClick: () -> Unit, onLongClick: () -> Unit, modifier:
 }
 
 @Composable
-fun RowScope.AppCell(app: AppInfo, onClick: () -> Unit, onLongClick: () -> Unit) {
+fun RowScope.AppCell(app: AppInfo, onClick: () -> Unit, onLongClick: () -> Unit, compact: Boolean = false) {
     Column(
         Modifier.weight(1f).pressable(onClick, onLongClick).padding(vertical = 4.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        AppIconB(app.pkg, 54.dp)
+        AppIconB(app.pkg, if (compact) 46.dp else 54.dp)
         Spacer(Modifier.height(5.dp))
-        Text(app.label, fontSize = 12.sp, color = Color.White.copy(0.92f), maxLines = 1,
+        Text(app.label, fontSize = if (compact) 11.sp else 12.sp, color = Color.White.copy(0.92f), maxLines = 1,
             overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center)
     }
 }

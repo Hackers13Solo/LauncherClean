@@ -1,12 +1,22 @@
-# Clean Launcher
+# Lume
 
 Launcher Android (Kotlin + Jetpack Compose): widget de música, pastas, lista de apps A–Z com barra alfabética,
 busca, pílulas (bateria, hora, volume) e muitos efeitos visuais.
 
 ## Baixar o APK
-Aba **Releases** (lado direito da página do repositório) → baixe `CleanLauncher.apk` da versão mais recente.
+Aba **Releases** (lado direito da página do repositório) → baixe `Lume.apk` da versão mais recente.
 Cada push na branch `main` gera uma nova Release automaticamente (GitHub Actions).
 O APK é assinado sempre com a mesma chave, então dá para instalar por cima da versão anterior.
+
+## Novidades da v1.3
+- **Novo nome: Lume**, com ícone novo (chama em degradê, com versão monocromática para ícones temáticos).
+- **Boas-vindas animadas** no primeiro uso: nome, layout, cor, efeitos ao vivo, papel de parede e permissões, com transições e confete. Dá para rever em Ajustes ▸ Sistema e sobre.
+- **4 modelos de tela inicial**: Clássico, Grade, Limpo e Compacto (Ajustes ▸ Tela inicial).
+- **Papéis de parede em alta qualidade**: busca só traz fotos grandes (ordenadas pela resolução), a pré-visualização carrega a imagem completa e o launcher não usa mais a miniatura como plano B.
+- **Categorias com opções dentro**: cada uma das 10 categorias tem 4 artes prontas e fotos da web da categoria para comparar.
+- **Câmera no topo**: a lista não passa mais por baixo do furo/notch da câmera.
+- **Aurora desligada por padrão** (só as partículas).
+- **Barra A–Z**: no fim da lista a letra em destaque agora é a última seção (Z), não mais o W.
 
 ## Novidades da v1.2
 **Correções**
@@ -44,8 +54,8 @@ Também: capa do álbum desfocada e equalizador animado no player, anel de bater
 vidro com borda em gradiente e balão de letra animado.
 
 ## Primeiro uso
-- Instale o APK, aperte o botão Home e escolha **Clean Launcher ▸ Sempre**.
-- Toque no widget de música e ative **Clean Launcher** em *Acesso a notificações*.
+- Instale o APK, aperte o botão Home e escolha **Lume ▸ Sempre**.
+- Toque no widget de música e ative **Lume** em *Acesso a notificações*.
 - Segure um app na lista → Favoritar / Adicionar à pasta / Ocultar / Info / Desinstalar.
 - Toque no **+** ao lado das pastas para criar uma.
 - Segure a data/relógio ou toque na engrenagem para abrir os **Ajustes**.

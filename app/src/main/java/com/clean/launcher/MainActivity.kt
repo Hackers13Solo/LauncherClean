@@ -45,6 +45,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
@@ -140,7 +141,8 @@ fun LauncherScreen(vm: LauncherVM, media: MediaWatcher, onBars: () -> Unit) {
     var folderOptions by remember { mutableStateOf<String?>(null) }
     var newFolder by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
-    var showWp by remember { mutableStateOf(!vm.wpAsked) }   // 1º uso: pergunta o papel de parede
+    var showWp by remember { mutableStateOf(false) }   // aberto pelas boas-vindas ou pelos Ajustes
+    var picked by remember { mutableStateOf<Triple<String, Int, Int>?>(null) }   // letra tocada na barra A–Z
     var touched by remember { mutableStateOf<String?>(null) }
     var pull by remember { mutableFloatStateOf(0f) }
 
@@ -177,12 +179,14 @@ fun LauncherScreen(vm: LauncherVM, media: MediaWatcher, onBars: () -> Unit) {
     val favs = vm.favorites.toList()
     val hiddenList = vm.hidden.toList()
     val visible = remember(vm.apps, hiddenList) { vm.apps.filter { it.pkg !in hiddenList } }
-    val grid = vm.gridMode
-    val (entries, headIndex) = remember(visible, favs, grid) {
+    val lm = vm.layoutMode
+    val cols = when (lm) { 1 -> 4; 3 -> 5; else -> 0 }   // colunas da grade (0 = lista)
+    val grid = cols > 0
+    val (entries, headIndex) = remember(visible, favs, cols) {
         val list = mutableListOf<Entry>()
         val idx = mutableMapOf<String, Int>()
         fun addApps(apps: List<AppInfo>) {
-            if (grid) apps.chunked(4).forEach { list.add(Entry.Cells(it)) }
+            if (grid) apps.chunked(cols).forEach { list.add(Entry.Cells(it)) }
             else apps.forEach { list.add(Entry.Item(it)) }
         }
         val favApps = visible.filter { it.pkg in favs }
@@ -243,7 +247,8 @@ fun LauncherScreen(vm: LauncherVM, media: MediaWatcher, onBars: () -> Unit) {
                     Modifier.fillMaxSize()
                         .graphicsLayer { val sc = if (vm.blur > 0f) 1.12f else 1f; scaleX = sc; scaleY = sc }
                         .blur(vm.blur.dp),
-                    contentScale = ContentScale.Crop
+                    contentScale = ContentScale.Crop,
+                    filterQuality = FilterQuality.High
                 )
             }
             Box(
@@ -272,11 +277,17 @@ fun LauncherScreen(vm: LauncherVM, media: MediaWatcher, onBars: () -> Unit) {
                 val bars = WindowInsets.systemBars.union(WindowInsets.displayCutout).asPaddingValues()
                 val topPad = maxOf(bars.calculateTopPadding(), 24.dp) + 8.dp
                 val bottomPad = maxOf(bars.calculateBottomPadding(), 12.dp)
+                // área da câmera (furo/notch) e da barra de status: a lista nunca passa por baixo dela
+                val safeTop = maxOf(
+                    WindowInsets.displayCutout.asPaddingValues().calculateTopPadding(),
+                    WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
+                )
+                val safeTopPx = with(density) { safeTop.toPx() }
 
                 LazyColumn(
                     state = listState,
-                    modifier = Modifier.nestedScroll(nested),
-                    contentPadding = PaddingValues(top = topPad, bottom = bottomPad + 110.dp)
+                    modifier = Modifier.padding(top = safeTop).nestedScroll(nested),
+                    contentPadding = PaddingValues(top = (topPad - safeTop).coerceAtLeast(8.dp), bottom = bottomPad + 110.dp)
                 ) {
                     item {
                         Column {
@@ -286,23 +297,23 @@ fun LauncherScreen(vm: LauncherVM, media: MediaWatcher, onBars: () -> Unit) {
                                 modifier = Modifier.padding(start = 24.dp, bottom = 10.dp)
                                     .combinedClickable(onClick = {}, onLongClick = { showSettings = true })
                             )
-                            Row(
+                            if (lm != 2) Row(
                                 Modifier.fillMaxWidth().padding(horizontal = 16.dp),
                                 horizontalArrangement = Arrangement.spacedBy(12.dp)
                             ) {
                                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(18.dp)) {
-                                    MusicCard(media)
+                                    if (lm == 0 || lm == 1) MusicCard(media)
                                     FoldersRow(
                                         vm, byPkg,
                                         onOpen = { openFolder = it },
                                         onOptions = { folderOptions = it },
                                         onAdd = { newFolder = true }
                                     )
-                                    if (vm.quickActions) QuickActions(vm.apps)
+                                    if (vm.quickActions && (lm == 0 || lm == 1)) QuickActions(vm.apps)
                                     if (vm.showMostUsed && topUsed.isNotEmpty())
                                         MostUsedRow(topUsed, onClick = open, onLongClick = { menuApp = it })
                                 }
-                                SidePills(vm.use24h)
+                                if (lm == 0 || lm == 1) SidePills(vm.use24h)
                             }
                         }
                     }
@@ -328,8 +339,8 @@ fun LauncherScreen(vm: LauncherVM, media: MediaWatcher, onBars: () -> Unit) {
                                 Modifier.fillMaxWidth().edgeFx(listState, i + 2, vm.edgeFx)
                                     .padding(start = 12.dp, end = 52.dp, top = 6.dp, bottom = 6.dp)
                             ) {
-                                e.apps.forEach { a -> AppCell(a, onClick = { open(a) }, onLongClick = { menuApp = a }) }
-                                repeat(4 - e.apps.size) { Spacer(Modifier.weight(1f)) }
+                                e.apps.forEach { a -> AppCell(a, onClick = { open(a) }, onLongClick = { menuApp = a }, compact = cols >= 5) }
+                                repeat(cols - e.apps.size) { Spacer(Modifier.weight(1f)) }
                             }
                         }
                     }
@@ -356,12 +367,22 @@ fun LauncherScreen(vm: LauncherVM, media: MediaWatcher, onBars: () -> Unit) {
                 }
                 val t by animateFloatAsState(progress, spring(stiffness = Spring.StiffnessMediumLow), label = "bar")
 
-                // letra da seção que está no topo da lista (destaque na barra)
+                // letra da seção que está no topo da lista (destaque na barra).
+                // No FIM da lista (ex.: apareceu o Z) a lista não rola mais, então o topo continua sendo o "W":
+                // nesse caso vale a letra tocada na barra ou, se não houve toque, a última seção visível.
                 val currentLetter by remember(entries) {
                     derivedStateOf {
                         val ei = listState.firstVisibleItemIndex - 2
                         if (ei < 0 || entries.isEmpty()) null
-                        else {
+                        else if (!listState.canScrollForward) {
+                            val heads = listState.layoutInfo.visibleItemsInfo
+                                .map { it.index - 2 }.filter { it in entries.indices }
+                                .mapNotNull { (entries[it] as? Entry.Head)?.key }
+                            val pk = picked
+                            val still = pk != null && pk.second == listState.firstVisibleItemIndex &&
+                                pk.third == listState.firstVisibleItemScrollOffset
+                            if (still && pk != null && pk.first in heads) pk.first else heads.lastOrNull()
+                        } else {
                             var k = ei.coerceAtMost(entries.lastIndex)
                             var r: String? = null
                             while (k >= 0) {
@@ -378,13 +399,13 @@ fun LauncherScreen(vm: LauncherVM, media: MediaWatcher, onBars: () -> Unit) {
                 val bottomReserve = with(density) { (bottomPad + 100.dp).toPx() }
                 val restMin = with(density) { (9.dp * letters.size).toPx() }
                 val restMax = with(density) { 392.dp.toPx() }
-                val restAvail = (screenHpx - headerBottom - bottomReserve).coerceIn(restMin, restMax)
+                val restAvail = (screenHpx - headerBottom - safeTopPx - bottomReserve).coerceIn(restMin, restMax)
                 val expanded = minOf(
                     screenHpx * 0.74f, with(density) { 600.dp.toPx() }, screenHpx - 2f * bottomReserve
                 ).coerceAtLeast(restMin)
                 val barHpx = restAvail + (expanded - restAvail) * t
                 val centerTop = (screenHpx - barHpx) / 2f
-                val topPx = maxOf(headerBottom + with(density) { 8.dp.toPx() }, centerTop)
+                val topPx = maxOf(headerBottom + safeTopPx + with(density) { 8.dp.toPx() }, centerTop, safeTopPx + with(density) { 8.dp.toPx() })
 
                 AlphaBar(
                     letters,
@@ -397,7 +418,13 @@ fun LauncherScreen(vm: LauncherVM, media: MediaWatcher, onBars: () -> Unit) {
                         val from = letters.indexOf(l)
                         val target = letters.drop(from).firstNotNullOfOrNull { headIndex[it] }
                             ?: headIndex.values.maxOrNull()
-                        if (target != null) scope.launch { listState.scrollToItem(target) }
+                        if (target != null) {
+                            val key = headIndex.entries.firstOrNull { it.value == target }?.key
+                            scope.launch {
+                                listState.scrollToItem(target)
+                                picked = key?.let { Triple(it, listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset) }
+                            }
+                        }
                     },
                     onActive = { touched = it },
                     modifier = Modifier.align(Alignment.TopEnd).padding(end = 6.dp)
@@ -449,6 +476,9 @@ fun LauncherScreen(vm: LauncherVM, media: MediaWatcher, onBars: () -> Unit) {
         folderOptions?.let { FolderOptionsDialog(vm, it) { folderOptions = null } }
         if (newFolder) NameDialog("Nova pasta", "", { vm.createFolder(it); newFolder = false }, { newFolder = false })
 
+        // ---- boas-vindas do primeiro uso
+        if (!vm.onboarded) Onboarding(vm, onWallpaper = { showWp = true })
+
         // ---- telas cheias: ajustes por categoria e escolha do papel de parede
         if (showSettings) SettingsScreen(
             vm,
@@ -486,7 +516,7 @@ fun SearchScreen(
     val ctx = LocalContext.current
     val calc = remember(q) { evalMath(q) }
 
-    Column(Modifier.fillMaxSize().systemBarsPadding().imePadding()) {
+    Column(Modifier.fillMaxSize().systemBarsPadding().displayCutoutPadding().imePadding()) {
         // melhor resultado fica colado no campo de busca (embaixo)
         LazyColumn(Modifier.weight(1f), reverseLayout = true) {
             if (calc != null) item(key = "calc") {

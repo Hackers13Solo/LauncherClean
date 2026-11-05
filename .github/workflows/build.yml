@@ -34,18 +34,18 @@ jobs:
           git commit -m "erros do build ${{ github.run_number }}" > /dev/null
           git push -f origin ci-log
       - name: Nomear o APK
-        run: cp app/build/outputs/apk/release/*.apk CleanLauncher.apk
+        run: cp app/build/outputs/apk/release/*.apk Lume.apk
       - uses: actions/upload-artifact@v4
         with:
-          name: CleanLauncher-apk
-          path: CleanLauncher.apk
+          name: Lume-apk
+          path: Lume.apk
       - name: Publicar na aba Releases
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG="v1.2-build${{ github.run_number }}"
-          gh release create "$TAG" CleanLauncher.apk \
+          TAG="v1.3-build${{ github.run_number }}"
+          gh release create "$TAG" Lume.apk \
             --target "$GITHUB_SHA" \
-            --title "Clean Launcher $TAG" \
-            --notes "APK gerado automaticamente. Baixe o arquivo CleanLauncher.apk abaixo, abra no celular e instale." \
+            --title "Lume $TAG" \
+            --notes "APK gerado automaticamente. Baixe o arquivo Lume.apk abaixo, abra no celular e instale." \
             --latest

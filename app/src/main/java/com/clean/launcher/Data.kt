@@ -105,14 +105,15 @@ class LauncherVM(private val app: Application) : AndroidViewModel(app) {
     var blur by mutableFloatStateOf(prefs.getFloat("blur", 0f))
     var hideStatus by mutableStateOf(prefs.getBoolean("hideStatus", true))
     var hideNav by mutableStateOf(prefs.getBoolean("hideNav", false))
-    var gridMode by mutableStateOf(prefs.getBoolean("grid", false))
+    // modelo da tela inicial: 0 clássico, 1 grade, 2 limpo, 3 compacto (quem usava "grade" continua com grade)
+    var layoutMode by mutableIntStateOf(prefs.getInt("layout", if (prefs.getBoolean("grid", false)) 1 else 0))
     var iconShape by mutableIntStateOf(prefs.getInt("shape", 0)) // 0 original, 1 redondo, 2 arredondado
     var haptics by mutableStateOf(prefs.getBoolean("haptics", true))
 
     // novidades da v1.1
     var accentIdx by mutableIntStateOf(prefs.getInt("accent", 0))
-    // efeitos de fundo em bits: 1 partículas, 2 aurora, 4 neve, 8 chuva (3 = partículas + aurora, igual à v1.1)
-    var fxMask by mutableIntStateOf(prefs.getInt("fx", 3))
+    // efeitos de fundo em bits: 1 partículas, 2 aurora, 4 neve, 8 chuva. Padrão: só partículas (aurora desligada)
+    var fxMask by mutableIntStateOf(loadFx())
     var edgeFx by mutableStateOf(prefs.getBoolean("edgeFx", true))   // desvanece/encolhe linhas nas bordas
     var bigClock by mutableStateOf(prefs.getBoolean("bigClock", true))
     var quickActions by mutableStateOf(prefs.getBoolean("quick", true))
@@ -129,17 +130,47 @@ class LauncherVM(private val app: Application) : AndroidViewModel(app) {
     var showMostUsed by mutableStateOf(prefs.getBoolean("showMostUsed", true))
     var rowPad by mutableFloatStateOf(prefs.getFloat("rowPad", 9f))
 
+    // novidades da v1.3
+    var onboarded by mutableStateOf(prefs.getBoolean("onboarded13", false))   // já passou pelas boas-vindas?
+
+    /** Padrão novo: só partículas. Na atualização para a v1.3 a aurora é desligada uma única vez. */
+    private fun loadFx(): Int {
+        var m = prefs.getInt("fx", 1)
+        if (!prefs.getBoolean("fxMig13", false)) {
+            m = m and 2.inv()
+            prefs.edit().putInt("fx", m).putBoolean("fxMig13", true).apply()
+        }
+        return m
+    }
+
     fun saveSettings() {
         prefs.edit()
             .putBoolean("customWp", useCustomWallpaper).putFloat("dim", dim).putFloat("blur", blur)
             .putBoolean("hideStatus", hideStatus).putBoolean("hideNav", hideNav)
-            .putBoolean("grid", gridMode).putInt("shape", iconShape).putBoolean("haptics", haptics)
+            .putInt("layout", layoutMode).putInt("shape", iconShape).putBoolean("haptics", haptics)
             .putInt("accent", accentIdx).putInt("fx", fxMask).putBoolean("edgeFx", edgeFx)
             .putBoolean("bigClock", bigClock).putBoolean("quick", quickActions).putBoolean("h24", use24h)
             .putFloat("iconSize", iconSize).putFloat("textSize", textSize).putBoolean("newBadge", newBadge)
             .putBoolean("wpAsked2", wpAsked).putBoolean("autoAccent", autoAccent).putInt("accentCustom", accentCustom)
             .putString("userName", userName).putBoolean("showMostUsed", showMostUsed).putFloat("rowPad", rowPad)
+            .putBoolean("onboarded13", onboarded)
             .apply()
+    }
+
+    fun setLayout(m: Int) {
+        layoutMode = m.coerceIn(0, 3)
+        saveSettings()
+    }
+
+    fun finishOnboarding() {
+        onboarded = true
+        wpAsked = true
+        saveSettings()
+    }
+
+    fun replayOnboarding() {
+        onboarded = false
+        saveSettings()
     }
 
     fun markWpAsked() {
@@ -182,7 +213,7 @@ class LauncherVM(private val app: Application) : AndroidViewModel(app) {
 
     /** Salva a imagem como papel de parede do launcher (chamar fora da thread principal). */
     fun applyWallpaperBitmap(bmp: Bitmap) {
-        File(app.filesDir, "wallpaper.jpg").outputStream().use { bmp.compress(Bitmap.CompressFormat.JPEG, 92, it) }
+        File(app.filesDir, "wallpaper.jpg").outputStream().use { bmp.compress(Bitmap.CompressFormat.JPEG, 96, it) }
         useCustomWallpaper = true
         wallpaperVersion++
         wpAsked = true
@@ -202,7 +233,7 @@ class LauncherVM(private val app: Application) : AndroidViewModel(app) {
                 val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
                 cr.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
                 var sample = 1
-                while (bounds.outWidth / sample > 2400 || bounds.outHeight / sample > 2400) sample *= 2
+                while (bounds.outWidth / sample > 3000 || bounds.outHeight / sample > 3000) sample *= 2
                 val opts = BitmapFactory.Options().apply { inSampleSize = sample }
                 val bmp = cr.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, opts) }
                 if (bmp != null) applyWallpaperBitmap(bmp)

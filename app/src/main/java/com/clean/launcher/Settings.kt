@@ -34,8 +34,8 @@ private enum class SPage(val title: String, val sub: String, val icon: ImageVect
     Look("Aparência", "Cor de destaque e formato dos ícones", Icons.Rounded.Palette),
     Wall("Papel de parede", "Trocar a imagem, escurecer e desfocar", Icons.Rounded.Wallpaper),
     Fx("Efeitos visuais", "Aurora, partículas, neve e chuva", Icons.Rounded.AutoAwesome),
-    Start("Tela inicial", "Relógio, seu nome, atalhos e mais usados", Icons.Rounded.Home),
-    Apps("Lista de apps", "Grade, tamanhos, espaçamento e barra A–Z", Icons.Rounded.ViewList),
+    Start("Tela inicial", "Layout, relógio, seu nome, atalhos e mais usados", Icons.Rounded.Home),
+    Apps("Lista de apps", "Tamanhos, espaçamento e barra A–Z", Icons.Rounded.ViewList),
     Bars("Barras do sistema", "Barra de status e de navegação", Icons.Rounded.Fullscreen),
     Hidden("Apps ocultos", "Mostrar apps que você escondeu", Icons.Rounded.VisibilityOff),
     Sys("Sistema e sobre", "Launcher padrão, notificações e novidades", Icons.Rounded.Tune)
@@ -105,7 +105,7 @@ fun SettingsScreen(vm: LauncherVM, onClose: () -> Unit, onChangeWallpaper: () ->
     BackHandler { if (page != null) page = null else onClose() }
 
     Box(
-        Modifier.fillMaxSize().background(Color(0xFA0E0E12)).pointerInput(Unit) { detectTapGestures { } }.systemBarsPadding()
+        Modifier.fillMaxSize().background(Color(0xFA0E0E12)).pointerInput(Unit) { detectTapGestures { } }.systemBarsPadding().displayCutoutPadding()
     ) {
         Column(Modifier.fillMaxSize()) {
             Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -193,6 +193,9 @@ fun SettingsScreen(vm: LauncherVM, onClose: () -> Unit, onChangeWallpaper: () ->
                         }
 
                         SPage.Start -> {
+                            Group("MODELO DA TELA INICIAL") {
+                                LayoutPicker(vm)
+                            }
                             Group("RELÓGIO E SAUDAÇÃO") {
                                 Toggle("Relógio grande com saudação", vm.bigClock) { vm.bigClock = it; vm.saveSettings() }
                                 Toggle("Relógio em 24 horas", vm.use24h) { vm.use24h = it; vm.saveSettings() }
@@ -211,7 +214,6 @@ fun SettingsScreen(vm: LauncherVM, onClose: () -> Unit, onChangeWallpaper: () ->
 
                         SPage.Apps -> {
                             Group("EXIBIÇÃO") {
-                                Toggle("Exibir em grade (4 colunas)", vm.gridMode) { vm.gridMode = it; vm.saveSettings() }
                                 Toggle("Selo NOVO em apps recém-instalados", vm.newBadge) { vm.newBadge = it; vm.saveSettings() }
                                 Toggle("Vibração ao usar a barra A–Z", vm.haptics) { vm.haptics = it; vm.saveSettings() }
                             }
@@ -246,7 +248,7 @@ fun SettingsScreen(vm: LauncherVM, onClose: () -> Unit, onChangeWallpaper: () ->
 
                         SPage.Sys -> {
                             Group("SISTEMA") {
-                                ActionRow(Icons.Rounded.Home, "Launcher padrão", "Definir o Clean Launcher como início") {
+                                ActionRow(Icons.Rounded.Home, "Launcher padrão", "Definir o Lume como início") {
                                     runCatching { ctx.startActivity(Intent(Settings.ACTION_HOME_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
                                 }
                                 ActionRow(Icons.Rounded.Notifications, "Acesso às notificações", "Necessário para o player de música e os selos") {
@@ -254,13 +256,17 @@ fun SettingsScreen(vm: LauncherVM, onClose: () -> Unit, onChangeWallpaper: () ->
                                 }
                             }
                             Group("SOBRE") {
-                                Text("Clean Launcher 1.2", fontSize = 17.sp, fontWeight = FontWeight.Medium)
+                                Text("Lume 1.3", fontSize = 17.sp, fontWeight = FontWeight.Medium)
                                 Text(
-                                    "Novidades: tela de papel de parede com busca na web e 10 categorias, ajustes por categoria, " +
-                                        "aurora renovada, neve e chuva, cor automática, seu nome na saudação, calculadora na busca " +
-                                        "e espaçamento ajustável.",
+                                    "Novidades: novo nome e ícone, boas-vindas animadas, 4 modelos de tela inicial, " +
+                                        "papéis de parede em alta qualidade com várias opções por categoria, " +
+                                        "proteção contra a câmera no topo da tela, aurora desligada por padrão " +
+                                        "e correção da letra na barra A–Z.",
                                     fontSize = 13.sp, color = Color.White.copy(0.65f)
                                 )
+                                ActionRow(Icons.Rounded.Refresh, "Rever as boas-vindas", "Abre o passo a passo de configuração de novo") {
+                                    vm.replayOnboarding(); onClose()
+                                }
                             }
                         }
                     }

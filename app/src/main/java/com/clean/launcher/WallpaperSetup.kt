@@ -2,11 +2,13 @@ package com.clean.launcher
 
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.rememberScrollState
@@ -23,6 +25,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.FilterQuality
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -39,7 +43,7 @@ import kotlinx.coroutines.withContext
 
 private sealed interface Pick {
     class Web(val img: WebImg) : Pick
-    class Sys(val wp: SysWp) : Pick
+    class Sys(val wp: SysWp, val variant: Int = 0) : Pick
 }
 
 @Composable
@@ -53,6 +57,19 @@ private fun SetupHeader(title: String, sub: String, onBack: () -> Unit) {
             Text(title, fontSize = 20.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
             if (sub.isNotEmpty()) Text(sub, fontSize = 13.sp, color = Color.White.copy(0.6f))
         }
+    }
+}
+
+/** Pré-visualização: mostra a miniatura na hora e troca pela imagem em alta qualidade assim que carregar. */
+@Composable
+private fun WebPreview(img: WebImg) {
+    val full by produceState<ImageBitmap?>(null, img.full) { value = loadPreview(img.full) }
+    Box(Modifier.fillMaxSize()) {
+        NetImage(img.thumb, Modifier.fillMaxSize(), ContentScale.Crop)
+        full?.let { Image(it, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop, filterQuality = FilterQuality.High) }
+        if (full == null) CircularProgressIndicator(
+            Modifier.align(Alignment.TopCenter).padding(top = 48.dp).size(22.dp), color = Color.White.copy(0.7f), strokeWidth = 2.dp
+        )
     }
 }
 
@@ -73,6 +90,23 @@ fun WallpaperSetup(vm: LauncherVM, firstRun: Boolean, onClose: () -> Unit, onGal
     var error by remember { mutableStateOf<String?>(null) }
     var pick by remember { mutableStateOf<Pick?>(null) }
     var applying by remember { mutableStateOf(false) }
+
+    // categoria aberta (modo 3): 4 artes prontas + fotos da web daquela categoria
+    var cat by remember { mutableStateOf<SysWp?>(null) }
+    var catResults by remember { mutableStateOf<List<WebImg>>(emptyList()) }
+    var catLoading by remember { mutableStateOf(false) }
+    var catError by remember { mutableStateOf(false) }
+    var catTry by remember { mutableIntStateOf(0) }
+    LaunchedEffect(cat, catTry) {
+        val c = cat ?: return@LaunchedEffect
+        catLoading = true
+        catError = false
+        catResults = emptyList()
+        val r = withContext(Dispatchers.IO) { runCatching { WebImages.search(c.query, "wallpaper 4k vertical phone") } }
+        catLoading = false
+        val l = r.getOrNull()
+        if (l == null || l.isEmpty()) catError = true else catResults = l
+    }
 
     fun runSearch() {
         val q = query.trim()
@@ -97,19 +131,19 @@ fun WallpaperSetup(vm: LauncherVM, firstRun: Boolean, onClose: () -> Unit, onGal
         applying = true
         scope.launch {
             val dm = ctx.resources.displayMetrics
-            val sc = minOf(1f, 1440f / maxOf(dm.widthPixels, dm.heightPixels))
+            val sc = minOf(1f, 2160f / maxOf(dm.widthPixels, dm.heightPixels))
             val tw = (dm.widthPixels * sc).toInt().coerceAtLeast(360)
             val th = (dm.heightPixels * sc).toInt().coerceAtLeast(640)
             val ok = withContext(Dispatchers.IO) {
                 val bmp = when (p) {
                     is Pick.Web -> downloadWallpaper(p.img)
-                    is Pick.Sys -> renderSysWallpaper(tw, th, p.wp.id)
+                    is Pick.Sys -> renderSysWallpaper(tw, th, p.wp.id, p.variant)
                 }
                 if (bmp != null) { vm.applyWallpaperBitmap(bmp); true } else false
             }
             applying = false
             if (ok) onClose()
-            else Toast.makeText(ctx, "Não consegui baixar essa imagem. Tente outra.", Toast.LENGTH_SHORT).show()
+            else Toast.makeText(ctx, "Essa imagem não baixou ou tem qualidade baixa. Tente outra.", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -117,6 +151,7 @@ fun WallpaperSetup(vm: LauncherVM, firstRun: Boolean, onClose: () -> Unit, onGal
         when {
             applying -> {}
             pick != null -> pick = null
+            mode == 3 -> mode = 2
             mode != 0 -> mode = 0
             else -> onClose()
         }
@@ -126,7 +161,7 @@ fun WallpaperSetup(vm: LauncherVM, firstRun: Boolean, onClose: () -> Unit, onGal
         Modifier.fillMaxSize().background(Color(0xFC0E0E12))
             .pointerInput(Unit) { detectTapGestures { } }
     ) {
-        Box(Modifier.fillMaxSize().systemBarsPadding()) {
+        Box(Modifier.fillMaxSize().systemBarsPadding().displayCutoutPadding()) {
             when (mode) {
                 0 -> Column(
                     Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 22.dp, vertical = 18.dp),
@@ -176,7 +211,7 @@ fun WallpaperSetup(vm: LauncherVM, firstRun: Boolean, onClose: () -> Unit, onGal
                             Column(Modifier.weight(1f)) {
                                 Text("Opções do sistema", fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
                                 Text(
-                                    "10 categorias prontas: desenho, paisagem, anime, terror, Natal, Páscoa…",
+                                    "10 categorias, cada uma com várias opções para comparar",
                                     fontSize = 13.sp, color = Color.White.copy(0.65f)
                                 )
                             }
@@ -245,8 +280,62 @@ fun WallpaperSetup(vm: LauncherVM, firstRun: Boolean, onClose: () -> Unit, onGal
                     }
                 }
 
+                3 -> Column(Modifier.fillMaxSize()) {
+                    val c = cat
+                    SetupHeader("${c?.emoji ?: ""}  ${c?.title ?: ""}", "Compare as opções e toque para ver em tela cheia") { mode = 2 }
+                    if (c != null) LazyVerticalGrid(
+                        GridCells.Fixed(3),
+                        contentPadding = PaddingValues(12.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        item(span = { GridItemSpan(3) }) {
+                            Text("ARTES DO LUME", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Accent,
+                                letterSpacing = 1.sp, modifier = Modifier.padding(start = 4.dp, top = 4.dp))
+                        }
+                        items((0 until SYS_VARIANTS).toList(), key = { "s$it" }) { v ->
+                            Box(
+                                Modifier.aspectRatio(9f / 16f).clip(RoundedCornerShape(14.dp))
+                                    .clickable { pick = Pick.Sys(c, v) }
+                            ) {
+                                androidx.compose.foundation.Canvas(Modifier.fillMaxSize()) { drawSysWallpaper(c.id, v) }
+                                Text("Opção ${v + 1}", fontSize = 12.sp, fontWeight = FontWeight.SemiBold,
+                                    modifier = Modifier.align(Alignment.BottomStart).padding(8.dp))
+                            }
+                        }
+                        item(span = { GridItemSpan(3) }) {
+                            Text("FOTOS DA WEB", fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Accent,
+                                letterSpacing = 1.sp, modifier = Modifier.padding(start = 4.dp, top = 12.dp))
+                        }
+                        when {
+                            catLoading -> item(span = { GridItemSpan(3) }) {
+                                Box(Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
+                                    CircularProgressIndicator(color = Accent)
+                                }
+                            }
+                            catError -> item(span = { GridItemSpan(3) }) {
+                                Column(
+                                    Modifier.fillMaxWidth().padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally,
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Text("Sem internet ou sem fotos agora.", color = Color.White.copy(0.7f), textAlign = TextAlign.Center)
+                                    TextButton({ catTry++ }) { Text("Tentar de novo", color = Accent) }
+                                }
+                            }
+                            else -> items(catResults, key = { it.full }) { img ->
+                                NetImage(
+                                    img.thumb,
+                                    Modifier.aspectRatio(9f / 16f).clip(RoundedCornerShape(14.dp))
+                                        .background(Color.White.copy(0.08f))
+                                        .clickable { pick = Pick.Web(img) }
+                                )
+                            }
+                        }
+                    }
+                }
+
                 else -> Column(Modifier.fillMaxSize()) {
-                    SetupHeader("Opções do sistema", "10 categorias • toque para ver") { mode = 0 }
+                    SetupHeader("Opções do sistema", "10 categorias • toque para abrir") { mode = 0 }
                     LazyVerticalGrid(
                         GridCells.Fixed(2),
                         contentPadding = PaddingValues(14.dp),
@@ -256,7 +345,7 @@ fun WallpaperSetup(vm: LauncherVM, firstRun: Boolean, onClose: () -> Unit, onGal
                         items(SysWallpapers, key = { it.id }) { wp ->
                             Box(
                                 Modifier.aspectRatio(0.72f).clip(RoundedCornerShape(22.dp))
-                                    .clickable { pick = Pick.Sys(wp) }
+                                    .clickable { cat = wp; mode = 3 }
                             ) {
                                 androidx.compose.foundation.Canvas(Modifier.fillMaxSize()) { drawSysWallpaper(wp.id) }
                                 Box(
@@ -278,8 +367,8 @@ fun WallpaperSetup(vm: LauncherVM, firstRun: Boolean, onClose: () -> Unit, onGal
         if (p != null) {
             Box(Modifier.fillMaxSize().background(Color.Black).pointerInput(Unit) { detectTapGestures { } }) {
                 when (p) {
-                    is Pick.Web -> NetImage(p.img.thumb, Modifier.fillMaxSize(), ContentScale.Crop)
-                    is Pick.Sys -> androidx.compose.foundation.Canvas(Modifier.fillMaxSize()) { drawSysWallpaper(p.wp.id) }
+                    is Pick.Web -> WebPreview(p.img)
+                    is Pick.Sys -> androidx.compose.foundation.Canvas(Modifier.fillMaxSize()) { drawSysWallpaper(p.wp.id, p.variant) }
                 }
                 Box(
                     Modifier.align(Alignment.BottomCenter).fillMaxWidth().height(240.dp)
