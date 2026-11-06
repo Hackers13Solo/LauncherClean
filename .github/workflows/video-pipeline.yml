@@ -1,0 +1,211 @@
+name: Pipeline de vídeo (Lume → YouTube)
+
+# Build → gravação no emulador → remoção de travamentos → edição → upload agendado.
+#
+# Cron diário: só envia ao YouTube se a variável do repositório AUTO_UPLOAD = true
+#   (Settings > Secrets and variables > Actions > Variables). Sem ela, o cron não faz nada.
+# Disparo manual: marque "upload" para enviar; desmarcado, gera o vídeo só como artefato.
+on:
+  schedule:
+    - cron: '0 12 * * *'   # todo dia às 12:00 UTC = 09:00 em Brasília
+  workflow_dispatch:
+    inputs:
+      upload:
+        description: 'Enviar ao YouTube (privado, agendado para +24h)'
+        type: boolean
+        default: false
+      force:
+        description: 'Gerar mesmo que esta versão já tenha vídeo publicado'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: lume-video-pipeline
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      skip: ${{ steps.info.outputs.skip }}
+      upload: ${{ steps.info.outputs.upload }}
+      tag: ${{ steps.info.outputs.tag }}
+      version: ${{ steps.info.outputs.version }}
+      release_url: ${{ steps.info.outputs.release_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12' }
+      - name: Decidir o que fazer
+        id: info
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EVENT: ${{ github.event_name }}
+          INPUT_UPLOAD: ${{ inputs.upload }}
+          INPUT_FORCE: ${{ inputs.force }}
+          AUTO_UPLOAD: ${{ vars.AUTO_UPLOAD }}
+        run: |
+          set -eu
+          UPLOAD=false
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            if [ "$INPUT_UPLOAD" = "true" ]; then UPLOAD=true; fi
+          else
+            if [ "${AUTO_UPLOAD:-}" = "true" ]; then UPLOAD=true; fi
+          fi
+
+          TAG=$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName -q .tagName)
+          if [ -z "$TAG" ]; then echo "::error::Nenhuma Release encontrada"; exit 1; fi
+          VERSION=$(echo "$TAG" | sed -E 's/^v//; s/-build/./')
+          RELEASE_URL="https://github.com/$GITHUB_REPOSITORY/releases/tag/$TAG"
+
+          SKIP=false
+          if [ "$EVENT" = "schedule" ] && [ "$UPLOAD" != "true" ]; then
+            echo "Cron com AUTO_UPLOAD desligado: nada a fazer."
+            SKIP=true
+          elif [ "$INPUT_FORCE" != "true" ]; then
+            BODY=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json body -q .body)
+            if echo "$BODY" | grep -q 'youtu.be/'; then
+              echo "A versão $VERSION já tem vídeo publicado: nada a fazer."
+              SKIP=true
+            fi
+          fi
+
+          echo "tag=$TAG"                 >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION"         >> "$GITHUB_OUTPUT"
+          echo "release_url=$RELEASE_URL" >> "$GITHUB_OUTPUT"
+          echo "upload=$UPLOAD"           >> "$GITHUB_OUTPUT"
+          echo "skip=$SKIP"               >> "$GITHUB_OUTPUT"
+          echo "Release $TAG | versão $VERSION | upload=$UPLOAD | skip=$SKIP"
+      - name: Validar autenticação do YouTube (falha cedo)
+        if: steps.info.outputs.upload == 'true' && steps.info.outputs.skip != 'true'
+        env:
+          YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
+          YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
+          YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
+        run: |
+          pip install -q google-api-python-client google-auth google-auth-httplib2
+          python .github/scripts/youtube_upload.py --check-auth
+
+  build:
+    needs: prepare
+    if: needs.prepare.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: 17 }
+      - uses: gradle/actions/setup-gradle@v4
+        with: { gradle-version: 8.9 }
+      - name: Compilar
+        run: gradle assembleRelease --no-daemon
+      - run: cp app/build/outputs/apk/release/*.apk Lume.apk
+      - uses: actions/upload-artifact@v4
+        with: { name: Lume-apk, path: Lume.apk }
+
+  record:
+    needs: [prepare, build]
+    if: needs.prepare.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { name: Lume-apk }
+      - name: Habilitar KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Gravar no emulador
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          force-avd-creation: true
+          disable-animations: false
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          script: |
+            bash .github/demo/record.sh Lume.apk demo-raw.mp4
+            adb logcat -d -v time > logcat.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: demo-raw
+          path: |
+            demo-raw.mp4
+            logcat.txt
+            snaps
+          if-no-files-found: warn
+
+  edit:
+    needs: [prepare, record]
+    if: needs.prepare.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      TAG: ${{ needs.prepare.outputs.tag }}
+      VERSION: ${{ needs.prepare.outputs.version }}
+      RELEASE_URL: ${{ needs.prepare.outputs.release_url }}
+      UPLOAD: ${{ needs.prepare.outputs.upload }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { name: demo-raw }
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12' }
+      - name: Instalar ffmpeg e fontes
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg fonts-dejavu-core
+
+      - name: Remover travamentos (e checar ANR/crash)
+        run: |
+          python .github/scripts/remove_freezes.py demo-raw.mp4 -o demo-clean.mp4 \
+            --logcat logcat.txt --report freeze-report.json
+
+      - name: Editar (canvas 16:9, textos, música)
+        run: |
+          EXTRA=""
+          if [ "$UPLOAD" = "true" ]; then EXTRA="--require-music"; fi
+          python .github/scripts/edit_video.py demo-clean.mp4 -o final.mp4 \
+            --version "$VERSION" --music-dir .github/demo/music \
+            --info edit-info.json --thumbnail thumb.jpg $EXTRA
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: video-final
+          path: |
+            final.mp4
+            thumb.jpg
+            freeze-report.json
+            edit-info.json
+          if-no-files-found: warn
+
+      - name: Enviar ao YouTube (privado, agendado para +24h)
+        id: yt
+        if: env.UPLOAD == 'true'
+        env:
+          YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
+          YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
+          YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
+        run: |
+          pip install -q google-api-python-client google-auth google-auth-httplib2
+          CREDIT=$(python -c "import json; print(json.load(open('edit-info.json'))['music_credit'])")
+          python .github/scripts/youtube_upload.py --video final.mp4 --version "$VERSION" \
+            --release-url "$RELEASE_URL" --extra-description "$CREDIT" --thumbnail thumb.jpg
+
+      - name: Registrar o vídeo nas notas da Release
+        if: env.UPLOAD == 'true' && steps.yt.outputs.video_url != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VIDEO_URL: ${{ steps.yt.outputs.video_url }}
+        run: |
+          NOTES=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json body -q .body)
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" \
+            --notes "${NOTES}"$'\n\n'"Vídeo de demonstração: ${VIDEO_URL}"
