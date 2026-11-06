@@ -515,6 +515,7 @@ fun LauncherScreen(vm: LauncherVM, media: MediaWatcher, onBars: () -> Unit) {
             onGallery = { picker.launch("image/*") }
         )
         if (showCar) CarMode(onClose = { showCar = false })
+        YoutubeLayer()
         if (showWp) WallpaperSetup(
             vm, firstRun = !vm.wpAsked,
             onClose = { vm.markWpAsked(); showWp = false },
