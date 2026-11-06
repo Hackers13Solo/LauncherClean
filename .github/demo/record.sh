@@ -92,20 +92,19 @@ snap 07_az
 swipef 950 860 950 575 2200; sleep 1.2
 
 # favoritar apps (v1.4: o nome não desce mais e nada duplica)
-swipef 500 700 500 300 450; sleep 1.4
+adb shell input keyevent KEYCODE_HOME; sleep 2.5     # volta ao topo da lista
 snap 07b_antes_fav
-longf 400 560; sleep 1.5
+longf 400 510; sleep 1.6                              # segura "Camera"
 snap 07c_menu
-tap_text "Favoritar" 500 470; sleep 2.2
+tap_text "Favoritar" 500 330; sleep 2.4
 snap 07d_depois_fav
-swipef 500 300 500 700 450; sleep 1.4
-snap 07e_topo_fav
-swipef 500 700 500 300 450; sleep 1.2
-longf 400 700; sleep 1.5
-tap_text "Favoritar" 500 600; sleep 2.2
-swipef 500 300 500 700 450; sleep 1.0
-swipef 500 300 500 700 450; sleep 1.5
+longf 400 640; sleep 1.6                              # segura o 2º app da lista
+snap 07e_menu2
+tap_text "Favoritar" 500 330; sleep 2.4
 snap 07f_dois_fav
+swipef 500 700 500 400 500; sleep 1.5
+swipef 500 400 500 700 500; sleep 1.5
+adb shell input keyevent KEYCODE_HOME; sleep 2
 
 # busca com calculadora
 tapf 878 917; sleep 2.2

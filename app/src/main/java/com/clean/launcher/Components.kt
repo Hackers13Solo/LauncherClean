@@ -824,7 +824,7 @@ fun AppMenuDialog(app: AppInfo, vm: LauncherVM, fromFolder: String?, onDismiss: 
     }
     CenterOverlay(onDismiss) {
         Surface(shape = RoundedCornerShape(28.dp), color = Color(0xF21B1B1F), contentColor = Color.White) {
-            Column(Modifier.padding(vertical = 12.dp)) {
+            Column(Modifier.heightIn(max = 520.dp).verticalScroll(rememberScrollState()).padding(vertical = 12.dp)) {
                 Row(Modifier.padding(horizontal = 22.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
                     AppIcon(app.pkg, 40.dp)
                     Spacer(Modifier.width(14.dp))
