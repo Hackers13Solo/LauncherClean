@@ -94,11 +94,11 @@ swipef 950 860 950 575 2200; sleep 1.2
 # favoritar apps (v1.4: o nome não desce mais e nada duplica)
 adb shell input keyevent KEYCODE_HOME; sleep 2.5     # volta ao topo da lista
 snap 07b_antes_fav
-longf 400 510; sleep 1.6                              # segura "Camera"
+longf 400 800; sleep 1.6                              # segura "Camera"
 snap 07c_menu
 tap_text "Favoritar" 500 330; sleep 2.4
 snap 07d_depois_fav
-longf 400 640; sleep 1.6                              # segura o 2º app da lista
+longf 400 842; sleep 1.6                              # segura o 2º app da lista
 snap 07e_menu2
 tap_text "Favoritar" 500 330; sleep 2.4
 snap 07f_dois_fav
