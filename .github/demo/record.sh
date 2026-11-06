@@ -14,6 +14,24 @@ W=${SZ%x*}; H=${SZ#*x}
 echo "Tela: ${W}x${H}"
 tapf() { adb shell input tap $(( W * $1 / 1000 )) $(( H * $2 / 1000 )); }
 swipef() { adb shell input swipe $(( W * $1 / 1000 )) $(( H * $2 / 1000 )) $(( W * $3 / 1000 )) $(( H * $4 / 1000 )) $5; }
+# toca num texto da tela (via uiautomator); se não achar, usa as coordenadas de reserva
+tap_text() {
+  rm -f ui.xml; timeout 25 adb shell uiautomator dump /sdcard/ui.xml >/dev/null 2>&1; adb pull /sdcard/ui.xml ui.xml >/dev/null 2>&1
+  C=$(python3 - "$1" <<'PY'
+import re, sys
+t = sys.argv[1]
+try:
+    x = open('ui.xml', encoding='utf-8').read()
+except Exception:
+    sys.exit()
+m = re.search(r'text="%s"[^>]*?bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"' % re.escape(t), x)
+if m:
+    a, b, c, d = map(int, m.groups()); print((a + c) // 2, (b + d) // 2)
+PY
+)
+  if [ -n "$C" ]; then echo "tap_text '$1' em $C"; adb shell input tap $C; else echo "tap_text '$1' sem uiautomator: usa coordenadas"; tapf $2 $3; fi
+}
+longf() { adb shell input swipe $(( W * $1 / 1000 )) $(( H * $2 / 1000 )) $(( W * $1 / 1000 )) $(( H * $2 / 1000 )) 900; }
 hide_kb() { adb shell dumpsys input_method | grep -q 'mInputShown=true' && adb shell input keyevent KEYCODE_BACK; }
 
 BTN_X=500; BTN_Y=922     # botão principal do rodapé (Vamos começar / Continuar / Entrar no Lume)
@@ -72,6 +90,22 @@ for i in 1 2; do swipef 500 300 500 700 450; sleep 1.0; done
 swipef 950 575 950 860 2200; sleep 1.2
 snap 07_az
 swipef 950 860 950 575 2200; sleep 1.2
+
+# favoritar apps (v1.4: o nome não desce mais e nada duplica)
+swipef 500 700 500 300 450; sleep 1.4
+snap 07b_antes_fav
+longf 400 560; sleep 1.5
+snap 07c_menu
+tap_text "Favoritar" 500 470; sleep 2.2
+snap 07d_depois_fav
+swipef 500 300 500 700 450; sleep 1.4
+snap 07e_topo_fav
+swipef 500 700 500 300 450; sleep 1.2
+longf 400 700; sleep 1.5
+tap_text "Favoritar" 500 600; sleep 2.2
+swipef 500 300 500 700 450; sleep 1.0
+swipef 500 300 500 700 450; sleep 1.5
+snap 07f_dois_fav
 
 # busca com calculadora
 tapf 878 917; sleep 2.2
