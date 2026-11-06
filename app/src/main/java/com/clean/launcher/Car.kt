@@ -163,10 +163,10 @@ object YtWin {
 
 /** Camada da janelinha do YouTube (fica por cima da tela inicial e do modo carro). */
 @Composable
-fun YoutubeLayer() {
+fun YoutubeLayer(docked: Boolean = false) {
     val ctx = LocalContext.current
     LaunchedEffect(Unit) { YtWin.load(ctx) }
-    if (YtWin.visible) YoutubeWindow()
+    if (YtWin.visible && !docked) YoutubeWindow()
     if (YtWin.cfg) {
         var text by remember { mutableStateOf(YtWin.url) }
         AlertDialog(
@@ -361,7 +361,42 @@ private fun carBattery(): State<Int> {
     }
 }
 
-/** Modo carro: layout vertical tipo multimídia, com YouTube, mapa/trajeto, hora, data e bateria. */
+/** Janela acoplada do modo carro: barra de título + conteúdo, igual à janelinha flutuante. */
+@Composable
+private fun CarWindow(
+    modifier: Modifier, title: String, icon: androidx.compose.ui.graphics.vector.ImageVector, tint: Color,
+    actions: @Composable RowScope.() -> Unit = {}, content: @Composable () -> Unit
+) {
+    val shape = RoundedCornerShape(18.dp)
+    Column(
+        modifier.clip(shape).background(Color(0xFF111418)).border(1.dp, Color.White.copy(0.18f), shape)
+    ) {
+        Row(
+            Modifier.fillMaxWidth().height(38.dp).background(Color(0xFF1E232A)).padding(start = 10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(icon, null, tint = tint, modifier = Modifier.size(20.dp))
+            Spacer(Modifier.width(8.dp))
+            Text(title, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f))
+            actions()
+        }
+        Box(Modifier.fillMaxWidth().weight(1f)) { content() }
+    }
+}
+
+@Composable
+private fun WinBtn(icon: androidx.compose.ui.graphics.vector.ImageVector, desc: String, on: () -> Unit) =
+    Box(Modifier.size(38.dp).clickable(onClick = on), contentAlignment = Alignment.Center) {
+        Icon(icon, desc, tint = Color.White.copy(0.9f), modifier = Modifier.size(18.dp))
+    }
+
+@Composable
+private fun WinText(label: String, on: () -> Unit) =
+    Box(Modifier.height(38.dp).clickable(onClick = on).padding(horizontal = 10.dp), contentAlignment = Alignment.Center) {
+        Text(label, color = Color(0xFFB57BFF), fontSize = 13.sp, fontWeight = FontWeight.Medium, maxLines = 1)
+    }
+
+/** Modo carro: horário no topo e, abaixo, o YouTube (metade de cima) e o mapa (metade de baixo) em janelas. */
 @Composable
 fun CarMode(onClose: () -> Unit) {
     val ctx = LocalContext.current
@@ -425,30 +460,62 @@ fun CarMode(onClose: () -> Unit) {
                 }
             }
 
-            // ---- widget do YouTube
-            Glass(Modifier.fillMaxWidth().height(96.dp), radius = 24.dp, onClick = { YtWin.open() }) {
-                Row(Modifier.fillMaxSize().padding(horizontal = 18.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Box(
-                        Modifier.size(52.dp).clip(RoundedCornerShape(16.dp)).background(Color(0xFFFF0033)),
-                        contentAlignment = Alignment.Center
-                    ) { Icon(Icons.Rounded.PlayArrow, null, tint = Color.White, modifier = Modifier.size(34.dp)) }
-                    Spacer(Modifier.width(14.dp))
-                    Column(Modifier.weight(1f)) {
-                        Text("YouTube", fontSize = 20.sp, fontWeight = FontWeight.SemiBold, color = Color.White)
-                        Text(
-                            "Toque para abrir a janelinha (toca na tela inicial)", fontSize = 13.sp, color = Color.White.copy(0.7f),
-                            maxLines = 1
-                        )
-                    }
-                    IconButton(onClick = { YtWin.cfg = true }) {
-                        Icon(Icons.Rounded.Settings, "Configurar URL", tint = Color.White.copy(0.85f))
+            // ---- janela do YouTube (metade de cima)
+            CarWindow(
+                Modifier.fillMaxWidth().weight(1f), "YouTube", Icons.Rounded.PlayCircle, Color(0xFFFF0033),
+                actions = {
+                    WinBtn(Icons.Rounded.Settings, "URL padrão") { YtWin.cfg = true }
+                    if (YtWin.visible) WinBtn(Icons.Rounded.Close, "Fechar") { YtWin.close() }
+                }
+            ) {
+                if (YtWin.visible) {
+                    AndroidView(
+                        factory = { YtWin.view(ctx).also { (it.parent as? ViewGroup)?.removeView(it) } },
+                        modifier = Modifier.fillMaxSize()
+                    )
+                } else {
+                    Column(
+                        Modifier.fillMaxSize().clickable { YtWin.open() },
+                        horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center
+                    ) {
+                        Box(
+                            Modifier.size(56.dp).clip(RoundedCornerShape(18.dp)).background(Color(0xFFFF0033)),
+                            contentAlignment = Alignment.Center
+                        ) { Icon(Icons.Rounded.PlayArrow, null, tint = Color.White, modifier = Modifier.size(36.dp)) }
+                        Spacer(Modifier.height(10.dp))
+                        Text("Toque para abrir o YouTube", fontSize = 14.sp, color = Color.White.copy(0.75f))
                     }
                 }
             }
 
-            // ---- widget do mapa / trajeto
-            Glass(Modifier.fillMaxWidth().weight(1f), radius = 24.dp) {
-                Column(Modifier.fillMaxSize().padding(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            // ---- janela do mapa / trajeto (metade de baixo)
+            CarWindow(
+                Modifier.fillMaxWidth().weight(1f), "Mapa", Icons.Rounded.Map, Color(0xFF34C759),
+                actions = {
+                    if (route != null) {
+                        WinText("Maps") {
+                            val ok = runCatching {
+                                ctx.startActivity(
+                                    Intent(Intent.ACTION_VIEW, Uri.parse("google.navigation:q=" + Uri.encode(route)))
+                                        .setPackage("com.google.android.apps.maps").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                )
+                            }.isSuccess
+                            if (!ok) Toast.makeText(ctx, "Google Maps não encontrado", Toast.LENGTH_SHORT).show()
+                        }
+                        WinText("Waze") {
+                            val ok = runCatching {
+                                ctx.startActivity(
+                                    Intent(Intent.ACTION_VIEW, Uri.parse("https://waze.com/ul?navigate=yes&q=" + Uri.encode(route)))
+                                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                )
+                            }.isSuccess
+                            if (!ok) Toast.makeText(ctx, "Waze não encontrado", Toast.LENGTH_SHORT).show()
+                        }
+                        WinText("Parar") { CarState.set(ctx, null) }
+                    }
+                }
+            ) {
+                Column(Modifier.fillMaxSize().padding(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         OutlinedTextField(
                             value = dest, onValueChange = { dest = it },
@@ -467,7 +534,7 @@ fun CarMode(onClose: () -> Unit) {
                             Text(if (route == null) "Iniciar" else "Atualizar")
                         }
                     }
-                    Box(Modifier.fillMaxWidth().weight(1f).clip(RoundedCornerShape(16.dp)).background(Color.Black.copy(0.4f))) {
+                    Box(Modifier.fillMaxWidth().weight(1f).clip(RoundedCornerShape(14.dp)).background(Color.Black.copy(0.4f))) {
                         val r = route
                         if (r == null) {
                             Text(
@@ -477,31 +544,6 @@ fun CarMode(onClose: () -> Unit) {
                             )
                         } else {
                             RouteMap(r, Modifier.fillMaxSize())
-                        }
-                    }
-                    if (route != null) Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(onClick = {
-                            val d = route.orEmpty()
-                            val ok = runCatching {
-                                ctx.startActivity(
-                                    Intent(Intent.ACTION_VIEW, Uri.parse("google.navigation:q=" + Uri.encode(d)))
-                                        .setPackage("com.google.android.apps.maps").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                )
-                            }.isSuccess
-                            if (!ok) Toast.makeText(ctx, "Google Maps não encontrado", Toast.LENGTH_SHORT).show()
-                        }, modifier = Modifier.weight(1f)) { Text("Maps", fontSize = 13.sp, maxLines = 1) }
-                        OutlinedButton(onClick = {
-                            val d = route.orEmpty()
-                            val ok = runCatching {
-                                ctx.startActivity(
-                                    Intent(Intent.ACTION_VIEW, Uri.parse("https://waze.com/ul?navigate=yes&q=" + Uri.encode(d)))
-                                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                )
-                            }.isSuccess
-                            if (!ok) Toast.makeText(ctx, "Waze não encontrado", Toast.LENGTH_SHORT).show()
-                        }, modifier = Modifier.weight(1f)) { Text("Waze", fontSize = 13.sp) }
-                        OutlinedButton(onClick = { CarState.set(ctx, null) }, modifier = Modifier.weight(1f)) {
-                            Text("Parar", fontSize = 13.sp)
                         }
                     }
                 }
