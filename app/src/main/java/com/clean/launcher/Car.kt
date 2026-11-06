@@ -45,6 +45,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
@@ -153,6 +154,8 @@ object YtWin {
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
             settings.mediaPlaybackRequiresUserGesture = false
+            // UA de Chrome comum (sem "wv"): o YouTube entrega o layout normal do navegador
+            settings.userAgentString = settings.userAgentString.replace("; wv", "").replace(Regex("Version/\\d+\\.\\d+ "), "")
             setBackgroundColor(android.graphics.Color.BLACK)
             webViewClient = object : WebViewClient() {
                 override fun shouldOverrideUrlLoading(v: WebView?, r: WebResourceRequest?): Boolean {
@@ -367,6 +370,12 @@ private fun carBattery(): State<Int> {
     }
 }
 
+private tailrec fun Context.findActivity(): android.app.Activity? = when (this) {
+    is android.app.Activity -> this
+    is android.content.ContextWrapper -> baseContext.findActivity()
+    else -> null
+}
+
 private const val WAZE_PKG = "com.waze"
 private const val MAPS_PKG = "com.google.android.apps.maps"
 
@@ -457,6 +466,11 @@ fun CarMode(onClose: () -> Unit) {
     var slot by remember { mutableStateOf<Rect?>(null) }
     val view = LocalView.current
     val freeform = remember { freeformOn(ctx) }
+    // tela dividida (Waze ao lado) ou pouca altura: layout compacto, YouTube ocupa tudo
+    val cfg = LocalConfiguration.current
+    val compact = remember(cfg) {
+        (android.os.Build.VERSION.SDK_INT >= 24 && ctx.findActivity()?.isInMultiWindowMode == true) || cfg.screenHeightDp < 560
+    }
     fun openNav(pkg: String, name: String, d: String) {
         if (!openNavApp(ctx, pkg, d, slot)) Toast.makeText(ctx, "$name não encontrado", Toast.LENGTH_SHORT).show()
     }
@@ -475,28 +489,35 @@ fun CarMode(onClose: () -> Unit) {
     ) {
         Column(
             Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.systemBars.union(WindowInsets.displayCutout))
-                .padding(horizontal = 16.dp, vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+                .padding(horizontal = 12.dp, vertical = 6.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             // ---- cabeçalho: hora, data e bateria
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
-                    Text(hhmm, fontSize = 56.sp, fontWeight = FontWeight.Light, color = Color.White)
-                    Text(date, fontSize = 15.sp, color = Color.White.copy(0.75f))
+                    Text(hhmm, fontSize = 34.sp, fontWeight = FontWeight.Light, color = Color.White)
+                    Text(date, fontSize = 12.sp, color = Color.White.copy(0.75f))
                 }
                 Row(
                     Modifier.clip(RoundedCornerShape(20.dp)).background(Color.White.copy(0.1f))
-                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                        .padding(horizontal = 10.dp, vertical = 5.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Icon(Icons.Rounded.BatteryFull, null, tint = Color.White.copy(0.8f), modifier = Modifier.size(20.dp))
                     Spacer(Modifier.width(4.dp))
-                    Text("$battery%", fontSize = 16.sp, color = Color.White, fontWeight = FontWeight.Medium)
+                    Text("$battery%", fontSize = 14.sp, color = Color.White, fontWeight = FontWeight.Medium)
                 }
-                Spacer(Modifier.width(10.dp))
-                Glass(Modifier.size(46.dp), radius = 23.dp, onClick = onClose) {
+                Spacer(Modifier.width(8.dp))
+                // abre o Waze (na tela dividida ele aparece ao lado)
+                Glass(Modifier.size(40.dp), radius = 20.dp, onClick = { openNav(WAZE_PKG, "Waze", route ?: dest.trim()) }) {
                     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Icon(Icons.Rounded.Close, "Fechar", tint = Color.White, modifier = Modifier.size(22.dp))
+                        Icon(Icons.Rounded.Navigation, "Waze", tint = Color.White, modifier = Modifier.size(20.dp))
+                    }
+                }
+                Spacer(Modifier.width(8.dp))
+                Glass(Modifier.size(40.dp), radius = 20.dp, onClick = onClose) {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Icon(Icons.Rounded.Close, "Fechar", tint = Color.White, modifier = Modifier.size(20.dp))
                     }
                 }
             }
@@ -530,7 +551,7 @@ fun CarMode(onClose: () -> Unit) {
             }
 
             // ---- janela de navegação (metade de baixo): o app Waze/Maps abre aqui, como janela de verdade
-            CarWindow(
+            if (!compact) CarWindow(
                 Modifier.fillMaxWidth().weight(1f), "Navegação", Icons.Rounded.Navigation, Color(0xFF34C759),
                 actions = {
                     WinText("Maps") { openNav(MAPS_PKG, "Google Maps", route ?: dest.trim()) }
