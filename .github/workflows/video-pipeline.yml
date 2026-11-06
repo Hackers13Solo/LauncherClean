@@ -187,6 +187,17 @@ jobs:
             edit-info.json
           if-no-files-found: warn
 
+      - name: Publicar prévia em Releases (só quando NÃO envia ao YouTube)
+        if: env.UPLOAD != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          [ -f final.mp4 ] || exit 0
+          gh release delete video-preview --yes --cleanup-tag 2>/dev/null || true
+          gh release create video-preview final.mp4 thumb.jpg freeze-report.json edit-info.json \
+            --title "Prévia do vídeo (não enviada ao YouTube)" \
+            --notes "Versão $VERSION. Assista antes de ativar o envio automático." --prerelease
+
       - name: Enviar ao YouTube (privado, agendado para +24h)
         id: yt
         if: env.UPLOAD == 'true'
