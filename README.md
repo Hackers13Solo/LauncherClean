@@ -8,6 +8,32 @@ Aba **Releases** (lado direito da página do repositório) → baixe `Lume.apk` 
 Cada push na branch `main` gera uma nova Release automaticamente (GitHub Actions).
 O APK é assinado sempre com a mesma chave, então dá para instalar por cima da versão anterior.
 
+## Novidades da v1.4
+**Correção**
+- **Favoritos**: ao favoritar um app, o nome não desce mais e o nome/ícone não duplicam. A lista agora usa chaves estáveis por linha e o ícone é recriado quando a linha muda de app.
+
+**20 novidades**
+1. Ordem dentro de cada letra: A–Z, mais usados ou mais recentes
+2. Seção ★ Favoritos pode ser desligada
+3. Favoritos em ordem alfabética ou na ordem em que foram fixados
+4. "Mover para o topo dos favoritos" no menu do app
+5. Renomear app (apelido)
+6. Apelido vazio restaura o nome original
+7. Contador "Aberto N vezes" no menu do app
+8. Mostrar/ocultar a quantidade em "Todos os apps"
+9. Nomes dos apps em destaque (texto mais grosso)
+10. Vibrar ao abrir um app
+11. Ligar/desligar selos de notificação nos ícones
+12. Quantidade de "Mais usados" (3 a 6)
+13. Buscador da web à escolha (Google, DuckDuckGo, Bing, Brave)
+14. Limpar todos os favoritos
+15. "Mostrar todos" nos apps ocultos
+16. Copiar backup (favoritos, pastas, ocultos, apelidos)
+17. Restaurar backup
+18. Compartilhar app
+19. Ver app na Play Store
+20. Barra A–Z pode ser escondida
+
 ## Novidades da v1.3
 - **Novo nome: Lume**, com ícone novo (chama em degradê, com versão monocromática para ícones temáticos).
 - **Boas-vindas animadas** no primeiro uso: nome, layout, cor, efeitos ao vivo, papel de parede e permissões, com transições e confete. Dá para rever em Ajustes ▸ Sistema e sobre.

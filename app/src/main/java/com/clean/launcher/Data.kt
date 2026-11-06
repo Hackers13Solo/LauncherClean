@@ -93,6 +93,7 @@ class LauncherVM(private val app: Application) : AndroidViewModel(app) {
     val folders = mutableStateListOf<Folder>()
     val favorites = mutableStateListOf<String>()
     var homeTick by mutableIntStateOf(0)
+    val nicks = mutableStateMapOf<String, String>()   // apelidos dos apps (v1.4)
 
     // apps ocultos e contagem de uso ("mais usados")
     val hidden = mutableStateListOf<String>()
@@ -133,6 +134,18 @@ class LauncherVM(private val app: Application) : AndroidViewModel(app) {
     // novidades da v1.3
     var onboarded by mutableStateOf(prefs.getBoolean("onboarded13", false))   // já passou pelas boas-vindas?
 
+    // novidades da v1.4
+    var sortMode by mutableIntStateOf(prefs.getInt("sortMode", 0))            // 0 A–Z, 1 mais usados, 2 mais recentes (dentro de cada letra)
+    var favTop by mutableStateOf(prefs.getBoolean("favTop", true))            // seção ★ Favoritos no topo
+    var favAlpha by mutableStateOf(prefs.getBoolean("favAlpha", true))        // favoritos em ordem alfabética (senão, ordem em que foram fixados)
+    var showCount by mutableStateOf(prefs.getBoolean("showCount", true))      // "Todos os apps (N)"
+    var boldText by mutableStateOf(prefs.getBoolean("boldText", false))
+    var hapticOpen by mutableStateOf(prefs.getBoolean("hapticOpen", false))
+    var notifBadge by mutableStateOf(prefs.getBoolean("notifBadge", true))
+    var mostUsedN by mutableIntStateOf(prefs.getInt("mostUsedN", 4))
+    var searchEngine by mutableIntStateOf(prefs.getInt("searchEngine", 0))    // 0 Google, 1 DuckDuckGo, 2 Bing, 3 Brave
+    var showAlpha by mutableStateOf(prefs.getBoolean("showAlpha", true))      // barra A–Z visível
+
     /** Padrão novo: só partículas. Na atualização para a v1.3 a aurora é desligada uma única vez. */
     private fun loadFx(): Int {
         var m = prefs.getInt("fx", 1)
@@ -154,6 +167,10 @@ class LauncherVM(private val app: Application) : AndroidViewModel(app) {
             .putBoolean("wpAsked2", wpAsked).putBoolean("autoAccent", autoAccent).putInt("accentCustom", accentCustom)
             .putString("userName", userName).putBoolean("showMostUsed", showMostUsed).putFloat("rowPad", rowPad)
             .putBoolean("onboarded13", onboarded)
+            .putInt("sortMode", sortMode).putBoolean("favTop", favTop).putBoolean("favAlpha", favAlpha)
+            .putBoolean("showCount", showCount).putBoolean("boldText", boldText).putBoolean("hapticOpen", hapticOpen)
+            .putBoolean("notifBadge", notifBadge).putInt("mostUsedN", mostUsedN).putInt("searchEngine", searchEngine)
+            .putBoolean("showAlpha", showAlpha)
             .apply()
     }
 
@@ -280,7 +297,7 @@ class LauncherVM(private val app: Application) : AndroidViewModel(app) {
                 .map {
                     val pkg = it.activityInfo.packageName
                     AppInfo(
-                        it.loadLabel(pm).toString(),
+                        nicks[it.activityInfo.packageName] ?: it.loadLabel(pm).toString(),
                         pkg,
                         ComponentName(pkg, it.activityInfo.name),
                         runCatching { pm.getPackageInfo(pkg, 0).firstInstallTime }.getOrDefault(0L)
@@ -307,6 +324,8 @@ class LauncherVM(private val app: Application) : AndroidViewModel(app) {
             for (i in 0 until hid.length()) hidden.add(hid.getString(i))
             val u = JSONObject(prefs.getString("usage", "{}"))
             u.keys().forEach { k -> usage[k] = u.getInt(k) }
+            val nk = JSONObject(prefs.getString("nicks", "{}"))
+            nk.keys().forEach { k -> nicks[k] = nk.getString(k) }
         }
     }
 
@@ -320,8 +339,59 @@ class LauncherVM(private val app: Application) : AndroidViewModel(app) {
             .putString("favs", JSONArray(favorites.toList()).toString())
             .putString("hidden", JSONArray(hidden.toList()).toString())
             .putString("usage", u.toString())
+            .putString("nicks", JSONObject(nicks.toMap()).toString())
             .apply()
     }
+
+    // ---------- v1.4: apelidos, favoritos e backup ----------
+    fun setNick(pkg: String, name: String) {
+        if (name.isBlank()) nicks.remove(pkg) else nicks[pkg] = name.trim().take(30)
+        save(); reload()
+    }
+
+    fun moveFavTop(pkg: String) {
+        if (favorites.remove(pkg)) {
+            favorites.add(0, pkg)
+            favAlpha = false
+            saveSettings(); save()
+        }
+    }
+
+    fun clearFavorites() { favorites.clear(); save() }
+
+    fun showAllHidden() { hidden.clear(); save() }
+
+    fun exportBackup(): String {
+        val fo = JSONArray()
+        folders.forEach { fo.put(JSONObject().put("name", it.name).put("apps", JSONArray(it.apps))) }
+        return JSONObject()
+            .put("lume", 1)
+            .put("favs", JSONArray(favorites.toList()))
+            .put("hidden", JSONArray(hidden.toList()))
+            .put("folders", fo)
+            .put("nicks", JSONObject(nicks.toMap()))
+            .toString()
+    }
+
+    fun importBackup(text: String): Boolean = runCatching {
+        val o = JSONObject(text.trim())
+        require(o.has("favs") && o.has("folders"))
+        val f = o.getJSONArray("favs")
+        val h = o.optJSONArray("hidden")
+        val fo = o.getJSONArray("folders")
+        val n = o.optJSONObject("nicks")
+        favorites.clear(); for (i in 0 until f.length()) favorites.add(f.getString(i))
+        hidden.clear(); if (h != null) for (i in 0 until h.length()) hidden.add(h.getString(i))
+        folders.clear()
+        for (i in 0 until fo.length()) {
+            val x = fo.getJSONObject(i)
+            val a = x.getJSONArray("apps")
+            folders.add(Folder(x.getString("name"), List(a.length()) { a.getString(it) }))
+        }
+        nicks.clear(); n?.keys()?.forEach { k -> nicks[k] = n.getString(k) }
+        save(); reload()
+        true
+    }.getOrDefault(false)
 
     // ---------- favoritos ----------
     fun toggleFav(pkg: String) {

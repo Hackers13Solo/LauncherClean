@@ -102,7 +102,8 @@ val AccentColors = listOf(
 var Accent by mutableStateOf(AccentColors[0])
 
 /** Tamanhos e opções da lista de apps, compartilhados via CompositionLocal. */
-data class ListStyle(val icon: Float = 52f, val text: Float = 26f, val showNew: Boolean = true, val pad: Float = 9f)
+data class ListStyle(val icon: Float = 52f, val text: Float = 26f, val showNew: Boolean = true, val pad: Float = 9f,
+                     val bold: Boolean = false, val notif: Boolean = true)
 val LocalListStyle = compositionLocalOf { ListStyle() }
 val GlassFill = Color.White.copy(alpha = 0.12f)
 val GlassBorder = Color.White.copy(alpha = 0.16f)
@@ -130,8 +131,10 @@ val LocalIconShape = compositionLocalOf { 0 }
 @Composable
 fun AppIcon(pkg: String, size: Dp) {
     val ctx = LocalContext.current
-    val bmp by produceState(IconCache.get(pkg), pkg) {
-        if (value == null) value = withContext(Dispatchers.IO) { IconCache.load(ctx, pkg) }
+    // o estado é recriado quando o pacote muda: a linha reaproveitada nunca mostra o ícone de outro app
+    var bmp by remember(pkg) { mutableStateOf(IconCache.get(pkg)) }
+    LaunchedEffect(pkg) {
+        if (bmp == null) bmp = withContext(Dispatchers.IO) { IconCache.load(ctx, pkg) }
     }
     val shape = when (LocalIconShape.current) {
         1 -> CircleShape
@@ -159,7 +162,7 @@ fun CountBadge(n: Int, modifier: Modifier = Modifier) {
 fun AppIconB(pkg: String, size: Dp) {
     Box {
         AppIcon(pkg, size)
-        val n = NotifListener.counts[pkg] ?: 0
+        val n = if (LocalListStyle.current.notif) (NotifListener.counts[pkg] ?: 0) else 0
         if (n > 0) CountBadge(n, Modifier.align(Alignment.TopEnd).offset(4.dp, (-4).dp))
     }
 }
@@ -808,11 +811,15 @@ fun NameDialog(title: String, initial: String = "", onOk: (String) -> Unit, onDi
 @Composable
 fun AppMenuDialog(app: AppInfo, vm: LauncherVM, fromFolder: String?, onDismiss: () -> Unit) {
     val ctx = LocalContext.current
-    var mode by remember { mutableIntStateOf(0) } // 0 principal, 1 escolher pasta, 2 nova pasta
+    var mode by remember { mutableIntStateOf(0) } // 0 principal, 1 escolher pasta, 2 nova pasta, 3 renomear
     val isFav = app.pkg in vm.favorites
 
     if (mode == 2) {
         NameDialog("Nova pasta", "", { vm.createFolder(it, app.pkg); onDismiss() }, onDismiss)
+        return
+    }
+    if (mode == 3) {
+        NameDialog("Renomear app", app.label, { vm.setNick(app.pkg, it); onDismiss() }, onDismiss)
         return
     }
     CenterOverlay(onDismiss) {
@@ -828,7 +835,33 @@ fun AppMenuDialog(app: AppInfo, vm: LauncherVM, fromFolder: String?, onDismiss: 
                     MenuRow(Icons.Rounded.Star, if (isFav) "Remover dos favoritos" else "Favoritar") {
                         vm.toggleFav(app.pkg); onDismiss()
                     }
+                    val opens = vm.usage[app.pkg] ?: 0
+                    Text(
+                        if (opens == 0) "Ainda não aberto pelo Lume" else "Aberto $opens ${if (opens == 1) "vez" else "vezes"}",
+                        fontSize = 12.sp, color = Color.White.copy(0.5f),
+                        modifier = Modifier.padding(horizontal = 22.dp, vertical = 2.dp)
+                    )
+                    if (isFav && vm.favorites.firstOrNull() != app.pkg)
+                        MenuRow(Icons.Rounded.Star, "Mover para o topo dos favoritos") { vm.moveFavTop(app.pkg); onDismiss() }
                     MenuRow(Icons.Rounded.Folder, "Adicionar à pasta") { mode = 1 }
+                    MenuRow(Icons.Rounded.Edit, "Renomear app") { mode = 3 }
+                    MenuRow(Icons.Rounded.Share, "Compartilhar app") {
+                        runCatching {
+                            val send = android.content.Intent(android.content.Intent.ACTION_SEND).setType("text/plain")
+                                .putExtra(android.content.Intent.EXTRA_TEXT, app.label + ": https://play.google.com/store/apps/details?id=" + app.pkg)
+                            ctx.startActivity(android.content.Intent.createChooser(send, null).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
+                        }
+                        onDismiss()
+                    }
+                    MenuRow(Icons.Rounded.ShoppingCart, "Ver na Play Store") {
+                        runCatching {
+                            ctx.startActivity(
+                                android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse("https://play.google.com/store/apps/details?id=" + app.pkg))
+                                    .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                            )
+                        }
+                        onDismiss()
+                    }
                     if (fromFolder != null)
                         MenuRow(Icons.Rounded.Close, "Remover desta pasta") {
                             vm.removeFromFolder(fromFolder, app.pkg); onDismiss()
@@ -870,7 +903,7 @@ fun AppRow(app: AppInfo, onClick: () -> Unit, onLongClick: () -> Unit, modifier:
     ) {
         AppIconB(app.pkg, st.icon.dp)
         Spacer(Modifier.width(20.dp))
-        Text(app.label, fontSize = st.text.sp, fontWeight = FontWeight.Light, color = Color.White,
+        Text(app.label, fontSize = st.text.sp, fontWeight = if (st.bold) FontWeight.Medium else FontWeight.Light, color = Color.White,
             maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, fill = false))
         if (st.showNew && isNewApp(app)) NewTag()
     }

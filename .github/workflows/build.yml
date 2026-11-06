@@ -43,7 +43,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG="v1.3-build${{ github.run_number }}"
+          TAG="v1.4-build${{ github.run_number }}"
           gh release create "$TAG" Lume.apk \
             --target "$GITHUB_SHA" \
             --title "Lume $TAG" \

@@ -11,8 +11,8 @@ android {
         applicationId = "com.clean.launcher"
         minSdk = 26
         targetSdk = 34
-        versionCode = 4
-        versionName = "1.3"
+        versionCode = 5
+        versionName = "1.4"
     }
 
     // chave fixa: todo APK novo é assinado igual, então dá para atualizar por cima sem desinstalar

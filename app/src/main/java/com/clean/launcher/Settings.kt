@@ -205,9 +205,18 @@ fun SettingsScreen(vm: LauncherVM, onClose: () -> Unit, onChangeWallpaper: () ->
                                     label = { Text("Seu nome (aparece na saudação)") }
                                 )
                             }
+                            Group("PESQUISAR NA WEB COM") {
+                                ChipsRow {
+                                    Chip("Google", vm.searchEngine == 0) { vm.searchEngine = 0; vm.saveSettings() }
+                                    Chip("DuckDuckGo", vm.searchEngine == 1) { vm.searchEngine = 1; vm.saveSettings() }
+                                    Chip("Bing", vm.searchEngine == 2) { vm.searchEngine = 2; vm.saveSettings() }
+                                    Chip("Brave", vm.searchEngine == 3) { vm.searchEngine = 3; vm.saveSettings() }
+                                }
+                            }
                             Group("ATALHOS") {
                                 Toggle("Atalhos rápidos", vm.quickActions, "Lanterna, Wi-Fi, Bluetooth, câmera e calculadora") { vm.quickActions = it; vm.saveSettings() }
                                 Toggle("Mostrar “Mais usados”", vm.showMostUsed) { vm.showMostUsed = it; vm.saveSettings() }
+                                Slide("Quantidade em “Mais usados”", vm.mostUsedN.toFloat(), 3f..6f, "${vm.mostUsedN}") { vm.mostUsedN = it.roundToInt(); vm.saveSettings() }
                                 Chip("Zerar “Mais usados”", false) { vm.resetUsage() }
                             }
                         }
@@ -216,6 +225,23 @@ fun SettingsScreen(vm: LauncherVM, onClose: () -> Unit, onChangeWallpaper: () ->
                             Group("EXIBIÇÃO") {
                                 Toggle("Selo NOVO em apps recém-instalados", vm.newBadge) { vm.newBadge = it; vm.saveSettings() }
                                 Toggle("Vibração ao usar a barra A–Z", vm.haptics) { vm.haptics = it; vm.saveSettings() }
+                                Toggle("Barra A–Z visível", vm.showAlpha) { vm.showAlpha = it; vm.saveSettings() }
+                                Toggle("Vibrar ao abrir um app", vm.hapticOpen) { vm.hapticOpen = it; vm.saveSettings() }
+                                Toggle("Selos de notificação nos ícones", vm.notifBadge) { vm.notifBadge = it; vm.saveSettings() }
+                                Toggle("Mostrar quantidade em “Todos os apps”", vm.showCount) { vm.showCount = it; vm.saveSettings() }
+                                Toggle("Nomes dos apps em destaque", vm.boldText, "Texto um pouco mais grosso") { vm.boldText = it; vm.saveSettings() }
+                            }
+                            Group("ORDEM DENTRO DE CADA LETRA") {
+                                ChipsRow {
+                                    Chip("A–Z", vm.sortMode == 0) { vm.sortMode = 0; vm.saveSettings() }
+                                    Chip("Mais usados", vm.sortMode == 1) { vm.sortMode = 1; vm.saveSettings() }
+                                    Chip("Mais recentes", vm.sortMode == 2) { vm.sortMode = 2; vm.saveSettings() }
+                                }
+                            }
+                            Group("FAVORITOS") {
+                                Toggle("Seção ★ Favoritos no topo", vm.favTop) { vm.favTop = it; vm.saveSettings() }
+                                Toggle("Favoritos em ordem alfabética", vm.favAlpha, "Desligado: na ordem em que você favoritou") { vm.favAlpha = it; vm.saveSettings() }
+                                Chip("Limpar todos os favoritos", false) { vm.clearFavorites() }
                             }
                             Group("TAMANHOS") {
                                 Slide("Tamanho dos ícones", vm.iconSize, 40f..72f, "${vm.iconSize.roundToInt()}") { vm.iconSize = it; vm.saveSettings() }
@@ -236,7 +262,10 @@ fun SettingsScreen(vm: LauncherVM, onClose: () -> Unit, onChangeWallpaper: () ->
                                     "Nenhum app oculto. Segure um app na lista e escolha “Ocultar app”.",
                                     fontSize = 14.sp, color = Color.White.copy(0.65f)
                                 )
-                            } else hiddenApps.forEach { a ->
+                            } else {
+                                Chip("Mostrar todos", false) { vm.showAllHidden() }
+                            }
+                            if (hiddenApps.isNotEmpty()) hiddenApps.forEach { a ->
                                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                                     AppIcon(a.pkg, 36.dp)
                                     Spacer(Modifier.width(12.dp))
@@ -255,13 +284,25 @@ fun SettingsScreen(vm: LauncherVM, onClose: () -> Unit, onChangeWallpaper: () ->
                                     openListenerSettings(ctx)
                                 }
                             }
+                            Group("BACKUP") {
+                                ActionRow(Icons.Rounded.ContentCopy, "Copiar backup", "Favoritos, pastas, apps ocultos e apelidos") {
+                                    val cm = ctx.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                                    cm.setPrimaryClip(android.content.ClipData.newPlainText("Lume backup", vm.exportBackup()))
+                                    android.widget.Toast.makeText(ctx, "Backup copiado", android.widget.Toast.LENGTH_SHORT).show()
+                                }
+                                ActionRow(Icons.Rounded.Refresh, "Restaurar backup", "Cole antes o texto copiado e toque aqui") {
+                                    val cm = ctx.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                                    val t = cm.primaryClip?.getItemAt(0)?.text?.toString() ?: ""
+                                    val ok = vm.importBackup(t)
+                                    android.widget.Toast.makeText(ctx, if (ok) "Backup restaurado" else "Área de transferência sem backup do Lume", android.widget.Toast.LENGTH_SHORT).show()
+                                }
+                            }
                             Group("SOBRE") {
-                                Text("Lume 1.3", fontSize = 17.sp, fontWeight = FontWeight.Medium)
+                                Text("Lume 1.4", fontSize = 17.sp, fontWeight = FontWeight.Medium)
                                 Text(
-                                    "Novidades: novo nome e ícone, boas-vindas animadas, 4 modelos de tela inicial, " +
-                                        "papéis de parede em alta qualidade com várias opções por categoria, " +
-                                        "proteção contra a câmera no topo da tela, aurora desligada por padrão " +
-                                        "e correção da letra na barra A–Z.",
+                                    "Novidades: correção dos favoritos (nome e ícone não duplicam mais), renomear apps, " +
+                                        "ordem da lista, favoritos configuráveis, buscador à escolha, backup, " +
+                                        "compartilhar app, Play Store e mais ajustes na lista.",
                                     fontSize = 13.sp, color = Color.White.copy(0.65f)
                                 )
                                 ActionRow(Icons.Rounded.Refresh, "Rever as boas-vindas", "Abre o passo a passo de configuração de novo") {

@@ -124,8 +124,8 @@ class MainActivity : ComponentActivity() {
 
 private sealed interface Entry {
     data class Head(val key: String) : Entry
-    data class Item(val app: AppInfo) : Entry
-    data class Cells(val apps: List<AppInfo>) : Entry
+    data class Item(val app: AppInfo, val sec: String = "") : Entry
+    data class Cells(val apps: List<AppInfo>, val sec: String = "") : Entry
 }
 
 @Composable
@@ -147,7 +147,11 @@ fun LauncherScreen(vm: LauncherVM, media: MediaWatcher, onBars: () -> Unit) {
     var pull by remember { mutableFloatStateOf(0f) }
 
     val byPkg = remember(vm.apps) { vm.apps.associateBy { it.pkg } }
-    val open: (AppInfo) -> Unit = { vm.recordLaunch(it.pkg); launchApp(ctx, it) }
+    val open: (AppInfo) -> Unit = {
+        if (vm.hapticOpen) (ctx as? android.app.Activity)?.window?.decorView
+            ?.performHapticFeedback(android.view.HapticFeedbackConstants.CLOCK_TICK)
+        vm.recordLaunch(it.pkg); launchApp(ctx, it)
+    }
 
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         if (uri != null) {
@@ -182,18 +186,23 @@ fun LauncherScreen(vm: LauncherVM, media: MediaWatcher, onBars: () -> Unit) {
     val lm = vm.layoutMode
     val cols = when (lm) { 1 -> 4; 3 -> 5; else -> 0 }   // colunas da grade (0 = lista)
     val grid = cols > 0
-    val (entries, headIndex) = remember(visible, favs, cols) {
+    val sortMode = vm.sortMode
+    val usageSnap = if (sortMode == 1) vm.usage.toMap() else null
+    val (entries, headIndex) = remember(visible, favs, cols, sortMode, usageSnap, vm.favTop, vm.favAlpha) {
         val list = mutableListOf<Entry>()
         val idx = mutableMapOf<String, Int>()
-        fun addApps(apps: List<AppInfo>) {
-            if (grid) apps.chunked(cols).forEach { list.add(Entry.Cells(it)) }
-            else apps.forEach { list.add(Entry.Item(it)) }
+        // "sec" entra na chave de cada linha: o mesmo app aparece em ★ e na sua letra, e as chaves não podem repetir
+        fun addApps(apps: List<AppInfo>, sec: String) {
+            if (grid) apps.chunked(cols).forEach { list.add(Entry.Cells(it, sec)) }
+            else apps.forEach { list.add(Entry.Item(it, sec)) }
         }
-        val favApps = visible.filter { it.pkg in favs }
+        val favApps = if (!vm.favTop) emptyList()
+            else if (vm.favAlpha) visible.filter { it.pkg in favs }
+            else favs.mapNotNull { p -> visible.firstOrNull { it.pkg == p } }
         if (favApps.isNotEmpty()) {
             idx["★"] = list.size + 2
             list.add(Entry.Head("★"))
-            addApps(favApps)
+            addApps(favApps, "★")
         }
         visible.groupBy {
             val c = norm(it.label).firstOrNull()
@@ -201,13 +210,18 @@ fun LauncherScreen(vm: LauncherVM, media: MediaWatcher, onBars: () -> Unit) {
         }.toSortedMap().forEach { (k, v) ->
             idx[k] = list.size + 2
             list.add(Entry.Head(k))
-            addApps(v)
+            val sorted = when (sortMode) {
+                1 -> v.sortedByDescending { usageSnap?.get(it.pkg) ?: 0 }
+                2 -> v.sortedByDescending { it.installed }
+                else -> v
+            }
+            addApps(sorted, k)
         }
         list to idx
     }
     val letters = remember { listOf("★", "#") + ('A'..'Z').map { it.toString() } }
     val topUsed = vm.usage.entries.sortedByDescending { it.value }
-        .mapNotNull { byPkg[it.key] }.filter { it.pkg !in hiddenList }.take(4)
+        .mapNotNull { byPkg[it.key] }.filter { it.pkg !in hiddenList }.take(vm.mostUsedN.coerceIn(3, 6))
     val date = remember {
         SimpleDateFormat("EEEE, d 'de' MMMM", Locale("pt", "BR")).format(Date()).replaceFirstChar { it.uppercase() }
     }
@@ -233,7 +247,7 @@ fun LauncherScreen(vm: LauncherVM, media: MediaWatcher, onBars: () -> Unit) {
 
     CompositionLocalProvider(
         LocalIconShape provides vm.iconShape,
-        LocalListStyle provides ListStyle(vm.iconSize, vm.textSize, vm.newBadge, vm.rowPad)
+        LocalListStyle provides ListStyle(vm.iconSize, vm.textSize, vm.newBadge, vm.rowPad, vm.boldText, vm.notifBadge)
     ) {
         Box(Modifier.fillMaxSize()) {
         BoxWithConstraints(Modifier.fillMaxSize()) {
@@ -268,7 +282,12 @@ fun LauncherScreen(vm: LauncherVM, media: MediaWatcher, onBars: () -> Unit) {
                         searching = false
                         runCatching {
                             ctx.startActivity(
-                                Intent(Intent.ACTION_VIEW, Uri.parse("https://www.google.com/search?q=" + Uri.encode(q)))
+                                Intent(Intent.ACTION_VIEW, Uri.parse(
+                                    listOf(
+                                        "https://www.google.com/search?q=", "https://duckduckgo.com/?q=",
+                                        "https://www.bing.com/search?q=", "https://search.brave.com/search?q="
+                                    )[vm.searchEngine.coerceIn(0, 3)] + Uri.encode(q)
+                                ))
                                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                             )
                         }
@@ -319,12 +338,19 @@ fun LauncherScreen(vm: LauncherVM, media: MediaWatcher, onBars: () -> Unit) {
                     }
                     item {
                         Text(
-                            "Todos os apps (${visible.size})", fontSize = 18.sp, color = Color.White.copy(0.85f),
+                            if (vm.showCount) "Todos os apps (${visible.size})" else "Todos os apps", fontSize = 18.sp, color = Color.White.copy(0.85f),
                             modifier = Modifier.padding(start = 22.dp, top = 26.dp, bottom = 6.dp)
                                 .combinedClickable(onClick = {}, onLongClick = { showSettings = true })
                         )
                     }
-                    items(entries.size) { i ->
+                    items(entries.size, key = { i ->
+                        // chaves estáveis: ao favoritar, cada linha mantém o próprio ícone e nome (corrige a duplicação)
+                        when (val e = entries[i]) {
+                            is Entry.Head -> "h:" + e.key
+                            is Entry.Item -> "i:" + e.sec + ":" + e.app.pkg
+                            is Entry.Cells -> "c:" + e.sec + ":" + e.apps.first().pkg
+                        }
+                    }) { i ->
                         when (val e = entries[i]) {
                             is Entry.Head -> Text(
                                 e.key, fontSize = 18.sp, fontWeight = FontWeight.Bold, color = Accent.copy(0.9f),
@@ -407,7 +433,7 @@ fun LauncherScreen(vm: LauncherVM, media: MediaWatcher, onBars: () -> Unit) {
                 val centerTop = (screenHpx - barHpx) / 2f
                 val topPx = maxOf(headerBottom + safeTopPx + with(density) { 8.dp.toPx() }, centerTop, safeTopPx + with(density) { 8.dp.toPx() })
 
-                AlphaBar(
+                if (vm.showAlpha) AlphaBar(
                     letters,
                     present = headIndex.keys,
                     current = currentLetter,
