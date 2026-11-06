@@ -141,6 +141,7 @@ fun LauncherScreen(vm: LauncherVM, media: MediaWatcher, onBars: () -> Unit) {
     var folderOptions by remember { mutableStateOf<String?>(null) }
     var newFolder by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
+    var showCar by remember { mutableStateOf(false) }
     var showWp by remember { mutableStateOf(false) }   // aberto pelas boas-vindas ou pelos Ajustes
     var picked by remember { mutableStateOf<Triple<String, Int, Int>?>(null) }   // letra tocada na barra A–Z
     var touched by remember { mutableStateOf<String?>(null) }
@@ -164,7 +165,7 @@ fun LauncherScreen(vm: LauncherVM, media: MediaWatcher, onBars: () -> Unit) {
     LaunchedEffect(vm.hideStatus, vm.hideNav) { onBars() }
     LaunchedEffect(vm.homeTick) {
         if (vm.homeTick > 0) {
-            searching = false; openFolder = null; menuApp = null; folderOptions = null; showSettings = false; newFolder = false
+            searching = false; openFolder = null; menuApp = null; folderOptions = null; showSettings = false; newFolder = false; showCar = false
             listState.animateScrollToItem(0)
         }
     }
@@ -332,7 +333,7 @@ fun LauncherScreen(vm: LauncherVM, media: MediaWatcher, onBars: () -> Unit) {
                                     if (vm.showMostUsed && topUsed.isNotEmpty())
                                         MostUsedRow(topUsed, onClick = open, onLongClick = { menuApp = it })
                                 }
-                                if (lm == 0 || lm == 1) SidePills(vm.use24h)
+                                if (lm == 0 || lm == 1) SidePills(vm.use24h) { showCar = true }
                             }
                         }
                     }
@@ -512,6 +513,7 @@ fun LauncherScreen(vm: LauncherVM, media: MediaWatcher, onBars: () -> Unit) {
             onChangeWallpaper = { showWp = true },
             onGallery = { picker.launch("image/*") }
         )
+        if (showCar) CarMode(onClose = { showCar = false })
         if (showWp) WallpaperSetup(
             vm, firstRun = !vm.wpAsked,
             onClose = { vm.markWpAsked(); showWp = false },

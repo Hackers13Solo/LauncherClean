@@ -554,7 +554,7 @@ private fun rememberBattery(): IntState {
 }
 
 @Composable
-fun SidePills(use24h: Boolean = true) {
+fun SidePills(use24h: Boolean = true, onCar: () -> Unit = {}) {
     val ctx = LocalContext.current
     val battery = rememberBattery().intValue
     val am = remember { ctx.getSystemService(Context.AUDIO_SERVICE) as AudioManager }
@@ -638,6 +638,12 @@ fun SidePills(use24h: Boolean = true) {
                     null, tint = Color.White.copy(0.75f), modifier = Modifier.size(18.dp)
                 )
                 Text("$vol%", fontSize = 13.sp, color = Color.White, fontWeight = FontWeight.Medium)
+            }
+        }
+        // modo carro (layout vertical de multimídia)
+        Glass(Modifier.size(width = 58.dp, height = 58.dp), radius = 29.dp, onClick = onCar) {
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Icon(Icons.Rounded.DirectionsCar, "Modo carro", tint = Color.White.copy(0.9f), modifier = Modifier.size(26.dp))
             }
         }
     }
