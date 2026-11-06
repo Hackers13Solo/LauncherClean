@@ -18,6 +18,7 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
@@ -50,10 +51,25 @@ private const val DESKTOP_UA =
 private fun mapsUrl(dest: String) =
     "https://www.google.com/maps/dir/?api=1&travelmode=driving&destination=" + Uri.encode(dest)
 
+/** Trajeto ativo, compartilhado entre o modo carro e a tela inicial (persistido). */
+object CarState {
+    var route by mutableStateOf<String?>(null)
+    private var loaded = false
+    fun load(ctx: Context) {
+        if (loaded) return
+        loaded = true
+        route = ctx.getSharedPreferences("launcher", Context.MODE_PRIVATE).getString("carRoute", null)?.ifBlank { null }
+    }
+    fun set(ctx: Context, r: String?) {
+        route = r
+        ctx.getSharedPreferences("launcher", Context.MODE_PRIVATE).edit().putString("carRoute", r ?: "").apply()
+    }
+}
+
 /** WebView embutido no Compose. Só recarrega quando a URL muda. */
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
-private fun Web(url: String, desktop: Boolean, modifier: Modifier = Modifier) {
+internal fun Web(url: String, desktop: Boolean, modifier: Modifier = Modifier) {
     val ctx = LocalContext.current
     val last = remember { arrayOfNulls<String>(1) }
     val wv = remember {
@@ -107,7 +123,8 @@ fun CarMode(onClose: () -> Unit) {
     val prefs = remember { ctx.getSharedPreferences("launcher", Context.MODE_PRIVATE) }
     var ytUrl by remember { mutableStateOf(prefs.getString("carYtUrl", DEFAULT_YT) ?: DEFAULT_YT) }
     var dest by remember { mutableStateOf(prefs.getString("carDest", "") ?: "") }
-    var route by remember { mutableStateOf<String?>(null) }   // destino com trajeto ativo
+    LaunchedEffect(Unit) { CarState.load(ctx) }
+    val route = CarState.route   // destino com trajeto ativo (também aparece na tela inicial)
     var ytOpen by remember { mutableStateOf(false) }
     var ytCfg by remember { mutableStateOf(false) }
 
@@ -130,7 +147,7 @@ fun CarMode(onClose: () -> Unit) {
         val d = dest.trim()
         if (d.isEmpty()) { Toast.makeText(ctx, "Digite para onde quer ir", Toast.LENGTH_SHORT).show(); return }
         prefs.edit().putString("carDest", d).apply()
-        route = d
+        CarState.set(ctx, d)
     }
 
     Box(
@@ -240,7 +257,7 @@ fun CarMode(onClose: () -> Unit) {
                             }.isSuccess
                             if (!ok) Toast.makeText(ctx, "Waze não encontrado", Toast.LENGTH_SHORT).show()
                         }, modifier = Modifier.weight(1f)) { Text("Waze", fontSize = 13.sp) }
-                        OutlinedButton(onClick = { route = null }, modifier = Modifier.weight(1f)) {
+                        OutlinedButton(onClick = { CarState.set(ctx, null) }, modifier = Modifier.weight(1f)) {
                             Text("Parar", fontSize = 13.sp)
                         }
                     }
@@ -284,6 +301,30 @@ fun CarMode(onClose: () -> Unit) {
                 },
                 dismissButton = { TextButton(onClick = { ytCfg = false }) { Text("Cancelar") } }
             )
+        }
+    }
+}
+
+/** Card da tela inicial: mostra o trajeto em andamento. Tocar abre o modo carro. */
+@Composable
+fun RouteCard(onOpen: () -> Unit) {
+    val ctx = LocalContext.current
+    LaunchedEffect(Unit) { CarState.load(ctx) }
+    val r = CarState.route ?: return
+    Glass(Modifier.fillMaxWidth().height(190.dp), radius = 24.dp) {
+        Box(Modifier.fillMaxSize()) {
+            Web(mapsUrl(r), desktop = true, modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(24.dp)))
+            // camada transparente: o mapa não rouba a rolagem da tela inicial
+            Box(Modifier.fillMaxSize().clickable(onClick = onOpen))
+            Row(
+                Modifier.align(Alignment.TopStart).padding(10.dp).clip(RoundedCornerShape(14.dp))
+                    .background(Color.Black.copy(0.65f)).padding(horizontal = 10.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(Icons.Rounded.Navigation, null, tint = Color.White, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(6.dp))
+                Text(r, color = Color.White, fontSize = 13.sp, maxLines = 1)
+            }
         }
     }
 }

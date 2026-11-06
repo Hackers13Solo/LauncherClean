@@ -323,6 +323,7 @@ fun LauncherScreen(vm: LauncherVM, media: MediaWatcher, onBars: () -> Unit) {
                             ) {
                                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(18.dp)) {
                                     if (lm == 0 || lm == 1) MusicCard(media)
+                                    if (lm == 0 || lm == 1) RouteCard { showCar = true }
                                     FoldersRow(
                                         vm, byPkg,
                                         onOpen = { openFolder = it },
