@@ -1,6 +1,9 @@
 package com.clean.launcher
 
 import android.Manifest
+import android.app.ActivityOptions
+import android.graphics.Rect
+import android.provider.Settings
 import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
@@ -42,6 +45,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
@@ -361,6 +367,32 @@ private fun carBattery(): State<Int> {
     }
 }
 
+private const val WAZE_PKG = "com.waze"
+private const val MAPS_PKG = "com.google.android.apps.maps"
+
+/** Janelas de formato livre ligadas no Android (Opções do desenvolvedor)? Sem isso, o Android não deixa o app abrir em janela. */
+private fun freeformOn(ctx: Context): Boolean =
+    ctx.packageManager.hasSystemFeature("android.software.freeform_window_management") ||
+        runCatching { Settings.Global.getInt(ctx.contentResolver, "enable_freeform_support", 0) == 1 }.getOrDefault(false)
+
+/**
+ * Abre um app de navegação (Waze/Maps) como janela de verdade, na área [bounds] (pixels da tela).
+ * Sem janelas livres no Android, o sistema ignora a área: abre ao lado (tela dividida) ou em tela cheia.
+ */
+private fun openNavApp(ctx: Context, pkg: String, dest: String, bounds: Rect?): Boolean {
+    val uri = when {
+        pkg == WAZE_PKG && dest.isNotBlank() -> "waze://?q=" + Uri.encode(dest) + "&navigate=yes"
+        pkg == WAZE_PKG -> "waze://"
+        dest.isNotBlank() -> "google.navigation:q=" + Uri.encode(dest)
+        else -> "geo:0,0"
+    }
+    val i = Intent(Intent.ACTION_VIEW, Uri.parse(uri)).setPackage(pkg)
+        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_LAUNCH_ADJACENT)
+    val opts = ActivityOptions.makeBasic()
+    if (bounds != null && !bounds.isEmpty) opts.setLaunchBounds(bounds)
+    return runCatching { ctx.startActivity(i, opts.toBundle()) }.isSuccess
+}
+
 /** Janela acoplada do modo carro: barra de título + conteúdo, igual à janelinha flutuante. */
 @Composable
 private fun CarWindow(
@@ -396,7 +428,7 @@ private fun WinText(label: String, on: () -> Unit) =
         Text(label, color = Color(0xFFB57BFF), fontSize = 13.sp, fontWeight = FontWeight.Medium, maxLines = 1)
     }
 
-/** Modo carro: horário no topo e, abaixo, o YouTube (metade de cima) e o mapa (metade de baixo) em janelas. */
+/** Modo carro: horário no topo e, abaixo, o YouTube (metade de cima) e o Waze/Maps (metade de baixo) em janelas. */
 @Composable
 fun CarMode(onClose: () -> Unit) {
     val ctx = LocalContext.current
@@ -421,11 +453,20 @@ fun CarMode(onClose: () -> Unit) {
 
     BackHandler { onClose() }
 
+    // área da tela onde a janela do Waze deve aparecer (metade de baixo)
+    var slot by remember { mutableStateOf<Rect?>(null) }
+    val view = LocalView.current
+    val freeform = remember { freeformOn(ctx) }
+    fun openNav(pkg: String, name: String, d: String) {
+        if (!openNavApp(ctx, pkg, d, slot)) Toast.makeText(ctx, "$name não encontrado", Toast.LENGTH_SHORT).show()
+    }
+
     fun start() {
         val d = dest.trim()
         if (d.isEmpty()) { Toast.makeText(ctx, "Digite para onde quer ir", Toast.LENGTH_SHORT).show(); return }
         prefs.edit().putString("carDest", d).apply()
         CarState.set(ctx, d)
+        openNav(WAZE_PKG, "Waze", d)
     }
 
     Box(
@@ -488,31 +529,13 @@ fun CarMode(onClose: () -> Unit) {
                 }
             }
 
-            // ---- janela do mapa / trajeto (metade de baixo)
+            // ---- janela de navegação (metade de baixo): o app Waze/Maps abre aqui, como janela de verdade
             CarWindow(
-                Modifier.fillMaxWidth().weight(1f), "Mapa", Icons.Rounded.Map, Color(0xFF34C759),
+                Modifier.fillMaxWidth().weight(1f), "Navegação", Icons.Rounded.Navigation, Color(0xFF34C759),
                 actions = {
-                    if (route != null) {
-                        WinText("Maps") {
-                            val ok = runCatching {
-                                ctx.startActivity(
-                                    Intent(Intent.ACTION_VIEW, Uri.parse("google.navigation:q=" + Uri.encode(route)))
-                                        .setPackage("com.google.android.apps.maps").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                )
-                            }.isSuccess
-                            if (!ok) Toast.makeText(ctx, "Google Maps não encontrado", Toast.LENGTH_SHORT).show()
-                        }
-                        WinText("Waze") {
-                            val ok = runCatching {
-                                ctx.startActivity(
-                                    Intent(Intent.ACTION_VIEW, Uri.parse("https://waze.com/ul?navigate=yes&q=" + Uri.encode(route)))
-                                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                )
-                            }.isSuccess
-                            if (!ok) Toast.makeText(ctx, "Waze não encontrado", Toast.LENGTH_SHORT).show()
-                        }
-                        WinText("Parar") { CarState.set(ctx, null) }
-                    }
+                    WinText("Maps") { openNav(MAPS_PKG, "Google Maps", route ?: dest.trim()) }
+                    WinText("Waze") { openNav(WAZE_PKG, "Waze", route ?: dest.trim()) }
+                    if (route != null) WinText("Parar") { CarState.set(ctx, null) }
                 }
             ) {
                 Column(Modifier.fillMaxSize().padding(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -534,16 +557,50 @@ fun CarMode(onClose: () -> Unit) {
                             Text(if (route == null) "Iniciar" else "Atualizar")
                         }
                     }
-                    Box(Modifier.fillMaxWidth().weight(1f).clip(RoundedCornerShape(14.dp)).background(Color.Black.copy(0.4f))) {
-                        val r = route
-                        if (r == null) {
+                    // espaço da janela do Waze (a posição dele é lida daqui)
+                    Box(
+                        Modifier.fillMaxWidth().weight(1f).clip(RoundedCornerShape(14.dp))
+                            .background(Color.Black.copy(0.4f))
+                            .onGloballyPositioned { c ->
+                                val p = c.positionInRoot()
+                                val loc = IntArray(2)
+                                view.getLocationOnScreen(loc)
+                                val l = loc[0] + p.x.roundToInt()
+                                val t = loc[1] + p.y.roundToInt()
+                                slot = Rect(l, t, l + c.size.width, t + c.size.height)
+                            },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Column(
+                            Modifier.fillMaxSize().padding(16.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center
+                        ) {
                             Text(
-                                "Digite o destino (com a cidade) e toque em Iniciar para ver o trajeto aqui.",
-                                color = Color.White.copy(0.7f), fontSize = 14.sp,
-                                modifier = Modifier.align(Alignment.Center).padding(24.dp)
+                                if (route == null) "Digite o destino e toque em Iniciar. O Waze abre aqui, em janela."
+                                else "Navegando para $route",
+                                color = Color.White.copy(0.8f), fontSize = 14.sp
                             )
-                        } else {
-                            RouteMap(r, Modifier.fillMaxSize())
+                            if (route != null) {
+                                Spacer(Modifier.height(10.dp))
+                                Button(onClick = { openNav(WAZE_PKG, "Waze", route) }, shape = RoundedCornerShape(14.dp)) {
+                                    Text("Abrir Waze aqui")
+                                }
+                            }
+                            if (!freeform) {
+                                Spacer(Modifier.height(12.dp))
+                                Text(
+                                    "As janelas livres do Android estão desligadas, então o Waze abre em tela cheia. " +
+                                        "Ligue \"Janelas de formato livre\" e \"Forçar redimensionamento\" nas Opções do desenvolvedor e reinicie o celular.",
+                                    color = Color(0xFFFFC857), fontSize = 12.sp
+                                )
+                                TextButton(onClick = {
+                                    runCatching {
+                                        ctx.startActivity(
+                                            Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                        )
+                                    }
+                                }) { Text("Abrir opções do desenvolvedor", fontSize = 12.sp) }
+                            }
                         }
                     }
                 }
