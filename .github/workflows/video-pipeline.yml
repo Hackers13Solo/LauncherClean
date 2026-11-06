@@ -194,7 +194,8 @@ jobs:
         run: |
           [ -f final.mp4 ] || exit 0
           gh release delete video-preview --yes --cleanup-tag 2>/dev/null || true
-          gh release create video-preview final.mp4 thumb.jpg freeze-report.json edit-info.json \
+          [ -d snaps ] && zip -q -r snaps.zip snaps || true
+          gh release create video-preview final.mp4 thumb.jpg freeze-report.json edit-info.json $( [ -f snaps.zip ] && echo snaps.zip ) \
             --title "Prévia do vídeo (não enviada ao YouTube)" \
             --notes "Versão $VERSION. Assista antes de ativar o envio automático." --prerelease
 
