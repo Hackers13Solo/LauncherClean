@@ -279,8 +279,10 @@ fun SettingsScreen(vm: LauncherVM, onClose: () -> Unit, onChangeWallpaper: () ->
                         SPage.Car -> {
                             var gpsDlg by remember { mutableStateOf(false) }
                             var ytDlg by remember { mutableStateOf(false) }
+                            var topDlg by remember { mutableStateOf(false) }
                             var tick by remember { mutableStateOf(0) }
                             val gpsName = remember(tick) { CarPrefs.gpsLabel(ctx) }
+                            val topName = remember(tick) { CarPrefs.topLabel(ctx) }
                             val ytUrl = remember(tick) { CarPrefs.ytUrl(ctx) }
                             Group("TELA DIVIDIDA") {
                                 Text(
@@ -288,8 +290,9 @@ fun SettingsScreen(vm: LauncherVM, onClose: () -> Unit, onChangeWallpaper: () ->
                                     fontSize = 13.sp, color = Color.White.copy(0.65f)
                                 )
                                 ActionRow(Icons.Rounded.Navigation, "App de GPS", gpsName ?: "Nenhum — o Lume pergunta na primeira vez") { gpsDlg = true }
+                                ActionRow(Icons.Rounded.PlayCircle, "App de cima (YouTube)", topName ?: "Não encontrado — toque para escolher") { topDlg = true }
                                 ActionRow(
-                                    Icons.Rounded.PlayCircle, "Página do YouTube",
+                                    Icons.Rounded.Link, "Página do YouTube",
                                     if (ytUrl.isBlank()) "Nenhuma — abre o YouTube normal" else ytUrl
                                 ) { ytDlg = true }
                                 ActionRow(
@@ -299,10 +302,13 @@ fun SettingsScreen(vm: LauncherVM, onClose: () -> Unit, onChangeWallpaper: () ->
                                     runCatching { ctx.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
                                 }
                                 ActionRow(Icons.Rounded.DirectionsCar, "Abrir agora", "YouTube em cima, GPS embaixo") {
-                                    if (CarPrefs.gps(ctx) == null) gpsDlg = true else CarSplit.start(ctx)
+                                    if (CarPrefs.gps(ctx) == null) gpsDlg = true
+                                    else if (CarPrefs.top(ctx) == null) topDlg = true
+                                    else CarSplit.start(ctx)
                                 }
                             }
                             if (gpsDlg) GpsChooserDialog(onPick = { CarPrefs.setGps(ctx, it); gpsDlg = false; tick++ }, onDismiss = { gpsDlg = false })
+                            if (topDlg) TopAppChooserDialog(onPick = { CarPrefs.setTop(ctx, it); topDlg = false; tick++ }, onDismiss = { topDlg = false })
                             if (ytDlg) YtUrlDialog { ytDlg = false; tick++ }
                         }
                         SPage.Sys -> {
