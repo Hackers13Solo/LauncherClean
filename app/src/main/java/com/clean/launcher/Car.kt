@@ -1,656 +1,186 @@
 package com.clean.launcher
 
-import android.Manifest
-import android.app.ActivityOptions
-import android.graphics.Rect
-import android.provider.Settings
-import android.annotation.SuppressLint
+import android.accessibilityservice.AccessibilityService
 import android.content.Context
 import android.content.Intent
-import android.content.IntentFilter
-import android.content.pm.PackageManager
 import android.net.Uri
-import android.os.BatteryManager
-import android.webkit.GeolocationPermissions
-import android.webkit.WebChromeClient
-import android.webkit.WebResourceRequest
-import android.webkit.WebView
-import android.webkit.WebViewClient
+import android.os.Handler
+import android.os.Looper
+import android.os.SystemClock
 import android.widget.Toast
-import androidx.activity.compose.BackHandler
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.gestures.detectDragGestures
-import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.unit.IntOffset
-import android.view.ViewGroup
-import kotlin.math.roundToInt
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalConfiguration
-import androidx.compose.ui.platform.LocalView
-import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.layout.positionInRoot
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.viewinterop.AndroidView
-import androidx.core.content.ContextCompat
-import kotlinx.coroutines.delay
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 
-private const val DEFAULT_YT = "https://youtube.com/playlist?list=PLarb-HH7nDPw&si=m7b3k5OX6_x9RRQq"
-private const val DESKTOP_UA =
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+private const val YT_PKG = "com.google.android.youtube"
 
-private fun mapsUrl(dest: String) =
-    "https://www.google.com/maps/dir/?api=1&travelmode=driving&destination=" + Uri.encode(dest)
-
-/** Trajeto ativo, compartilhado entre o modo carro e a tela inicial (persistido). */
-object CarState {
-    var route by mutableStateOf<String?>(null)
-    private var loaded = false
-    fun load(ctx: Context) {
-        if (loaded) return
-        loaded = true
-        route = ctx.getSharedPreferences("launcher", Context.MODE_PRIVATE).getString("carRoute", null)?.ifBlank { null }
-    }
-    fun set(ctx: Context, r: String?) {
-        route = r
-        ctx.getSharedPreferences("launcher", Context.MODE_PRIVATE).edit().putString("carRoute", r ?: "").apply()
+/** Preferências do modo carro. */
+object CarPrefs {
+    private fun p(ctx: Context) = ctx.getSharedPreferences("launcher", Context.MODE_PRIVATE)
+    fun gps(ctx: Context): String? = p(ctx).getString("carGps", null)?.ifBlank { null }
+    fun setGps(ctx: Context, pkg: String?) { p(ctx).edit().putString("carGps", pkg ?: "").apply() }
+    /** Página do YouTube. Vazio = abre o YouTube normal, sem link direto. */
+    fun ytUrl(ctx: Context): String = p(ctx).getString("carYt", "") ?: ""
+    fun setYtUrl(ctx: Context, u: String) { p(ctx).edit().putString("carYt", u).apply() }
+    fun gpsLabel(ctx: Context): String? = gps(ctx)?.let { pkg ->
+        runCatching { ctx.packageManager.getApplicationLabel(ctx.packageManager.getApplicationInfo(pkg, 0)).toString() }.getOrNull()
     }
 }
 
-/** WebView embutido no Compose. Só recarrega quando a URL muda. */
-@SuppressLint("SetJavaScriptEnabled")
-@Composable
-internal fun Web(url: String, desktop: Boolean, modifier: Modifier = Modifier) {
-    val ctx = LocalContext.current
-    val last = remember { arrayOfNulls<String>(1) }
-    val wv = remember {
-        WebView(ctx).apply {
-            settings.javaScriptEnabled = true
-            settings.domStorageEnabled = true
-            settings.setGeolocationEnabled(true)
-            settings.mediaPlaybackRequiresUserGesture = false
-            settings.useWideViewPort = true
-            settings.loadWithOverviewMode = true
-            if (desktop) settings.userAgentString = DESKTOP_UA
-            setBackgroundColor(android.graphics.Color.BLACK)
-            webViewClient = object : WebViewClient() {
-                // não deixa a página abrir outros apps (intent://, vnd.youtube:, etc.)
-                override fun shouldOverrideUrlLoading(v: WebView?, r: WebResourceRequest?): Boolean {
-                    val s = r?.url?.scheme ?: return false
-                    return s != "http" && s != "https"
-                }
-            }
-            webChromeClient = object : WebChromeClient() {
-                override fun onGeolocationPermissionsShowPrompt(origin: String?, cb: GeolocationPermissions.Callback?) {
-                    cb?.invoke(origin, true, false)
-                }
-            }
-        }
+/** Serviço de acessibilidade usado só para pedir ao Android que divida a tela (não lê nada da tela). */
+class SplitService : AccessibilityService() {
+    override fun onServiceConnected() { inst = this }
+    override fun onAccessibilityEvent(event: android.view.accessibility.AccessibilityEvent?) {}
+    override fun onInterrupt() {}
+    override fun onUnbind(intent: Intent?): Boolean { if (inst === this) inst = null; return super.onUnbind(intent) }
+    companion object { @Volatile var inst: SplitService? = null }
+}
+
+class NavApp(val label: String, val pkg: String)
+
+/** Apps de GPS instalados: Waze, Google Maps e qualquer app que abra links de mapa. */
+fun navApps(ctx: Context): List<NavApp> {
+    val pm = ctx.packageManager
+    val found = LinkedHashMap<String, String>()
+    fun add(pkg: String) {
+        if (pkg == ctx.packageName) return
+        runCatching { found[pkg] = pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0)).toString() }
     }
-    DisposableEffect(Unit) { onDispose { wv.stopLoading(); wv.destroy() } }
-    AndroidView(factory = { wv }, modifier = modifier, update = {
-        if (last[0] != url) { last[0] = url; it.loadUrl(url) }
-    })
-}
-
-/** Janela flutuante do YouTube: um único WebView que continua tocando enquanto você navega na tela inicial. */
-object YtWin {
-    var visible by mutableStateOf(false)
-    var minimized by mutableStateOf(false)
-    var cfg by mutableStateOf(false)
-    var url by mutableStateOf(DEFAULT_YT)
-    var offX by mutableStateOf(40f)
-    var offY by mutableStateOf(420f)
-    var wDp by mutableStateOf(320f)
-    var hDp by mutableStateOf(260f)
-    private var loaded = false
-    private var wv: WebView? = null
-    private var loadedUrl: String? = null
-
-    fun load(ctx: Context) {
-        if (loaded) return
-        loaded = true
-        url = ctx.getSharedPreferences("launcher", Context.MODE_PRIVATE).getString("carYtUrl", DEFAULT_YT) ?: DEFAULT_YT
+    add("com.waze")
+    add("com.google.android.apps.maps")
+    runCatching {
+        pm.queryIntentActivities(Intent(Intent.ACTION_VIEW, Uri.parse("geo:0,0?q=a")), 0)
+            .forEach { add(it.activityInfo.packageName) }
     }
-    fun saveUrl(ctx: Context, u: String) {
-        url = u
-        ctx.getSharedPreferences("launcher", Context.MODE_PRIVATE).edit().putString("carYtUrl", u).apply()
-    }
-    fun open() { visible = true; minimized = false }
-    fun close() {
-        visible = false
-        wv?.loadUrl("about:blank")   // para o áudio
-        loadedUrl = null
-    }
-
-    @SuppressLint("SetJavaScriptEnabled")
-    fun view(ctx: Context): WebView {
-        val v = wv ?: WebView(ctx).apply {
-            settings.javaScriptEnabled = true
-            settings.domStorageEnabled = true
-            settings.mediaPlaybackRequiresUserGesture = false
-            // UA de Chrome comum (sem "wv"): o YouTube entrega o layout normal do navegador
-            settings.userAgentString = settings.userAgentString.replace("; wv", "").replace(Regex("Version/\\d+\\.\\d+ "), "")
-            setBackgroundColor(android.graphics.Color.BLACK)
-            webViewClient = object : WebViewClient() {
-                override fun shouldOverrideUrlLoading(v: WebView?, r: WebResourceRequest?): Boolean {
-                    val s = r?.url?.scheme ?: return false
-                    return s != "http" && s != "https"
-                }
-            }
-            webChromeClient = WebChromeClient()
-        }.also { wv = it }
-        if (loadedUrl != url) { loadedUrl = url; v.loadUrl(url) }   // sempre abre a URL padrão
-        return v
-    }
+    return found.map { NavApp(it.value, it.key) }
 }
 
-/** Camada da janelinha do YouTube (fica por cima da tela inicial e do modo carro). */
-@Composable
-fun YoutubeLayer(docked: Boolean = false) {
-    val ctx = LocalContext.current
-    LaunchedEffect(Unit) { YtWin.load(ctx) }
-    if (YtWin.visible && !docked) YoutubeWindow()
-    if (YtWin.cfg) {
-        var text by remember { mutableStateOf(YtWin.url) }
-        AlertDialog(
-            onDismissRequest = { YtWin.cfg = false },
-            title = { Text("URL padrão do YouTube") },
-            text = {
-                Column {
-                    Text("Essa página abre sempre que você abrir a janela do YouTube.", fontSize = 13.sp)
-                    Spacer(Modifier.height(8.dp))
-                    OutlinedTextField(value = text, onValueChange = { text = it }, minLines = 2)
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    var u = text.trim().ifEmpty { DEFAULT_YT }
-                    if (!u.startsWith("http")) u = "https://$u"
-                    YtWin.saveUrl(ctx, u)
-                    YtWin.cfg = false
-                    if (YtWin.visible) YtWin.view(ctx)   // recarrega com a nova URL
-                }) { Text("Salvar") }
-            },
-            dismissButton = { TextButton(onClick = { YtWin.cfg = false }) { Text("Cancelar") } }
-        )
-    }
+private fun launch(ctx: Context, i: Intent?, adjacent: Boolean): Boolean {
+    i ?: return false
+    i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or (if (adjacent) Intent.FLAG_ACTIVITY_LAUNCH_ADJACENT else 0))
+    return runCatching { ctx.startActivity(i) }.isSuccess
 }
 
-@Composable
-private fun YoutubeWindow() {
-    val ctx = LocalContext.current
-    val d = LocalDensity.current
-    val shape = RoundedCornerShape(16.dp)
-    Column(
-        Modifier
-            .offset { IntOffset(YtWin.offX.roundToInt(), YtWin.offY.roundToInt()) }
-            .width(YtWin.wDp.dp)
-            .shadow(18.dp, shape)
-            .clip(shape)
-            .background(Color(0xFF111418))
-            .border(1.dp, Color.White.copy(0.18f), shape)
-    ) {
-        // barra de título (arraste para mover a janela)
-        Row(
-            Modifier.fillMaxWidth().height(38.dp).background(Color(0xFF1E232A))
-                .pointerInput(Unit) {
-                    detectDragGestures { c, drag ->
-                        c.consume()
-                        YtWin.offX += drag.x
-                        YtWin.offY += drag.y
-                    }
-                }
-                .padding(start = 10.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(Icons.Rounded.PlayCircle, null, tint = Color(0xFFFF0033), modifier = Modifier.size(20.dp))
-            Spacer(Modifier.width(8.dp))
-            Text("YouTube", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f))
-            @Composable fun Btn(icon: androidx.compose.ui.graphics.vector.ImageVector, desc: String, on: () -> Unit) =
-                Box(Modifier.size(38.dp).clickable(onClick = on), contentAlignment = Alignment.Center) {
-                    Icon(icon, desc, tint = Color.White.copy(0.9f), modifier = Modifier.size(18.dp))
-                }
-            Btn(Icons.Rounded.Settings, "URL padrão") { YtWin.cfg = true }
-            Btn(if (YtWin.minimized) Icons.Rounded.OpenInFull else Icons.Rounded.Remove, "Minimizar") { YtWin.minimized = !YtWin.minimized }
-            Btn(Icons.Rounded.Close, "Fechar") { YtWin.close() }
-        }
-        // conteúdo (minimizado: continua tocando, só esconde o vídeo)
-        Box(Modifier.fillMaxWidth().height(if (YtWin.minimized) 1.dp else YtWin.hDp.dp)) {
-            AndroidView(
-                factory = { YtWin.view(ctx).also { (it.parent as? ViewGroup)?.removeView(it) } },
-                modifier = Modifier.fillMaxSize()
-            )
-            if (!YtWin.minimized) Box(
-                Modifier.align(Alignment.BottomEnd).size(34.dp)
-                    .pointerInput(Unit) {
-                        detectDragGestures { c, drag ->
-                            c.consume()
-                            YtWin.wDp = (YtWin.wDp + drag.x / d.density).coerceIn(200f, 460f)
-                            YtWin.hDp = (YtWin.hDp + drag.y / d.density).coerceIn(120f, 700f)
-                        }
-                    },
-                contentAlignment = Alignment.BottomEnd
-            ) {
-                Icon(Icons.Rounded.DragHandle, "Redimensionar", tint = Color.White.copy(0.8f),
-                    modifier = Modifier.padding(6.dp).size(18.dp))
-            }
-        }
-    }
+private fun youtubeIntent(ctx: Context): Intent? {
+    val u = CarPrefs.ytUrl(ctx)
+    return if (u.isBlank()) ctx.packageManager.getLaunchIntentForPackage(YT_PKG)
+    else Intent(Intent.ACTION_VIEW, Uri.parse(u)).setPackage(YT_PKG)
 }
-
-/** Mapa com rota feito em OpenStreetMap + OSRM (funciona dentro do WebView, sem chave de API). */
-private fun routeHtml(dest: String): String = """
-<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width,initial-scale=1">
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
-<style>
-html,body,#m{height:100%;margin:0;background:#0b1118}
-.leaflet-tile-pane{filter:brightness(.85) contrast(1.05)}
-#info{position:absolute;left:8px;right:8px;bottom:8px;z-index:999;background:rgba(10,14,20,.88);color:#fff;
- font:600 15px sans-serif;padding:10px 14px;border-radius:14px;display:none}
-#info small{display:block;font-weight:400;opacity:.8;margin-top:2px;font-size:13px}
-</style></head><body><div id="m"></div><div id="info"></div>
-<script>
-var DEST=${org.json.JSONObject.quote(dest)};
-var map=L.map('m',{zoomControl:false,attributionControl:false}).setView([-26.48,-49.07],13);
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19}).addTo(map);
-var me=null,target=null,line=null,tm=null,lastReq=0,fitted=false,info=document.getElementById('info');
-function say(t,s){info.style.display='block';info.innerHTML=t+(s?'<small>'+s+'</small>':'')}
-function step(st){
-  var m=st.maneuver||{},n=st.name?(' em '+st.name):'';
-  var mod={left:'à esquerda','slight left':'levemente à esquerda','sharp left':'fechado à esquerda',right:'à direita','slight right':'levemente à direita','sharp right':'fechado à direita',straight:'em frente',uturn:'faça o retorno'}[m.modifier]||'';
-  if(m.type==='arrive')return 'Chegada ao destino';
-  if(m.type==='depart')return 'Siga'+n;
-  if(m.type==='roundabout'||m.type==='rotary')return 'Na rotatória, saia'+n;
-  return 'Vire '+mod+n;
-}
-function route(){
-  if(!me||!target)return;
-  lastReq=Date.now();
-  fetch('https://router.project-osrm.org/route/v1/driving/'+me[1]+','+me[0]+';'+target[1]+','+target[0]+'?overview=full&geometries=geojson&steps=true')
-   .then(function(r){return r.json()}).then(function(j){
-     if(!j.routes||!j.routes.length){say('Sem rota encontrada');return}
-     var r=j.routes[0];
-     if(line)map.removeLayer(line);
-     line=L.geoJSON(r.geometry,{style:{color:'#4da3ff',weight:6,opacity:.95}}).addTo(map);
-     if(!fitted){map.fitBounds(line.getBounds(),{padding:[30,60]});fitted=true}
-     var km=(r.distance/1000).toFixed(1).replace('.',','),min=Math.round(r.duration/60);
-     var st=r.legs[0].steps[1]||r.legs[0].steps[0];
-     say(km+' km · '+min+' min',st?step(st):'');
-   }).catch(function(){say('Sem conexão para calcular a rota')});
-}
-function setMe(lat,lon){
-  me=[lat,lon];
-  if(!me_m){me_m=L.circleMarker(me,{radius:8,color:'#fff',weight:3,fillColor:'#2f80ff',fillOpacity:1}).addTo(map)}
-  else me_m.setLatLng(me);
-  if(Date.now()-lastReq>30000)route();
-}
-var me_m=null;
-fetch('https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=br&q='+encodeURIComponent(DEST))
- .then(function(r){return r.json()}).then(function(j){
-   if(!j.length){say('Destino não encontrado','Tente incluir a cidade no nome');return}
-   target=[parseFloat(j[0].lat),parseFloat(j[0].lon)];
-   tm=L.circleMarker(target,{radius:9,color:'#fff',weight:3,fillColor:'#ff3b30',fillOpacity:1}).addTo(map);
-   map.setView(target,14);
-   say('Calculando rota...','Aguardando sua localização');
-   route();
- }).catch(function(){say('Sem conexão para buscar o destino')});
-if(navigator.geolocation){
-  navigator.geolocation.watchPosition(function(p){setMe(p.coords.latitude,p.coords.longitude)},
-   function(){if(!me)say('Ative o GPS e permita a localização')},{enableHighAccuracy:true,maximumAge:5000});
-}
-</script></body></html>
-"""
-
-/** WebView do mapa com rota até [dest]. Recarrega só quando o destino muda. */
-@SuppressLint("SetJavaScriptEnabled")
-@Composable
-internal fun RouteMap(dest: String, modifier: Modifier = Modifier) {
-    val ctx = LocalContext.current
-    val last = remember { arrayOfNulls<String>(1) }
-    val wv = remember {
-        WebView(ctx).apply {
-            settings.javaScriptEnabled = true
-            settings.domStorageEnabled = true
-            settings.setGeolocationEnabled(true)
-            setBackgroundColor(android.graphics.Color.parseColor("#0B1118"))
-            webChromeClient = object : WebChromeClient() {
-                override fun onGeolocationPermissionsShowPrompt(origin: String?, cb: GeolocationPermissions.Callback?) {
-                    cb?.invoke(origin, true, false)
-                }
-            }
-        }
-    }
-    DisposableEffect(Unit) { onDispose { wv.stopLoading(); wv.destroy() } }
-    AndroidView(factory = { wv }, modifier = modifier, update = {
-        if (last[0] != dest) {
-            last[0] = dest
-            it.loadDataWithBaseURL("https://lume.local/", routeHtml(dest), "text/html", "utf-8", null)
-        }
-    })
-}
-
-@Composable
-private fun carBattery(): State<Int> {
-    val ctx = LocalContext.current
-    return produceState(0) {
-        while (true) {
-            val i = ctx.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
-            val l = i?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
-            val s = i?.getIntExtra(BatteryManager.EXTRA_SCALE, 100) ?: 100
-            if (l >= 0) value = l * 100 / s.coerceAtLeast(1)
-            delay(15_000)
-        }
-    }
-}
-
-private tailrec fun Context.findActivity(): android.app.Activity? = when (this) {
-    is android.app.Activity -> this
-    is android.content.ContextWrapper -> baseContext.findActivity()
-    else -> null
-}
-
-private const val WAZE_PKG = "com.waze"
-private const val MAPS_PKG = "com.google.android.apps.maps"
-
-/** Janelas de formato livre ligadas no Android (Opções do desenvolvedor)? Sem isso, o Android não deixa o app abrir em janela. */
-private fun freeformOn(ctx: Context): Boolean =
-    ctx.packageManager.hasSystemFeature("android.software.freeform_window_management") ||
-        runCatching { Settings.Global.getInt(ctx.contentResolver, "enable_freeform_support", 0) == 1 }.getOrDefault(false)
 
 /**
- * Abre um app de navegação (Waze/Maps) como janela de verdade, na área [bounds] (pixels da tela).
- * Sem janelas livres no Android, o sistema ignora a área: abre ao lado (tela dividida) ou em tela cheia.
+ * Tela dividida de verdade: YouTube em cima, GPS embaixo.
+ * 1) abre o YouTube; 2) o serviço de acessibilidade pede a divisão de tela (o YouTube vai para cima);
+ * 3) quando o Lume reaparece na metade de baixo, ele abre o GPS ali (o Android só deixa abrir o GPS
+ * a partir de um app que está visível).
  */
-private fun openNavApp(ctx: Context, pkg: String, dest: String, bounds: Rect?): Boolean {
-    val uri = when {
-        pkg == WAZE_PKG && dest.isNotBlank() -> "waze://?q=" + Uri.encode(dest) + "&navigate=yes"
-        pkg == WAZE_PKG -> "waze://"
-        dest.isNotBlank() -> "google.navigation:q=" + Uri.encode(dest)
-        else -> "geo:0,0"
-    }
-    val i = Intent(Intent.ACTION_VIEW, Uri.parse(uri)).setPackage(pkg)
-        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_LAUNCH_ADJACENT)
-    val opts = ActivityOptions.makeBasic()
-    if (bounds != null && !bounds.isEmpty) opts.setLaunchBounds(bounds)
-    return runCatching { ctx.startActivity(i, opts.toBundle()) }.isSuccess
-}
+object CarSplit {
+    private val h = Handler(Looper.getMainLooper())
+    private var waitingSince = 0L
 
-/** Janela acoplada do modo carro: barra de título + conteúdo, igual à janelinha flutuante. */
-@Composable
-private fun CarWindow(
-    modifier: Modifier, title: String, icon: androidx.compose.ui.graphics.vector.ImageVector, tint: Color,
-    actions: @Composable RowScope.() -> Unit = {}, content: @Composable () -> Unit
-) {
-    val shape = RoundedCornerShape(18.dp)
-    Column(
-        modifier.clip(shape).background(Color(0xFF111418)).border(1.dp, Color.White.copy(0.18f), shape)
-    ) {
-        Row(
-            Modifier.fillMaxWidth().height(38.dp).background(Color(0xFF1E232A)).padding(start = 10.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(icon, null, tint = tint, modifier = Modifier.size(20.dp))
-            Spacer(Modifier.width(8.dp))
-            Text(title, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f))
-            actions()
+    fun start(ctx: Context) {
+        val app = ctx.applicationContext
+        val gps = CarPrefs.gps(app)
+        if (gps == null) { Toast.makeText(app, "Escolha o app de GPS primeiro", Toast.LENGTH_SHORT).show(); return }
+        if (!launch(app, youtubeIntent(app), false)) {
+            Toast.makeText(app, "YouTube não encontrado", Toast.LENGTH_SHORT).show(); return
         }
-        Box(Modifier.fillMaxWidth().weight(1f)) { content() }
+        val svc = SplitService.inst
+        if (svc == null) {
+            Toast.makeText(app, "Para dividir a tela sozinho, ative o Lume em Acessibilidade (Ajustes ▸ Modo carro)", Toast.LENGTH_LONG).show()
+            h.postDelayed({ openGps(app) }, 1200)
+            return
+        }
+        h.postDelayed({
+            waitingSince = SystemClock.elapsedRealtime()
+            svc.performGlobalAction(AccessibilityService.GLOBAL_ACTION_TOGGLE_SPLIT_SCREEN)
+            // se o Lume não reaparecer sozinho, tenta abrir o GPS mesmo assim
+            h.postDelayed({ if (waitingSince != 0L) openGps(app) }, 3500)
+        }, 1500)
+    }
+
+    private fun openGps(ctx: Context) {
+        waitingSince = 0L
+        val gps = CarPrefs.gps(ctx) ?: return
+        if (!launch(ctx, ctx.packageManager.getLaunchIntentForPackage(gps), true))
+            Toast.makeText(ctx, "App de GPS não encontrado. Escolha outro em Ajustes ▸ Modo carro", Toast.LENGTH_LONG).show()
+    }
+
+    /** Chamado pela tela inicial quando ela fica visível. */
+    fun onLumeShown(ctx: Context) {
+        if (waitingSince != 0L && SystemClock.elapsedRealtime() - waitingSince < 8000) openGps(ctx)
     }
 }
 
 @Composable
-private fun WinBtn(icon: androidx.compose.ui.graphics.vector.ImageVector, desc: String, on: () -> Unit) =
-    Box(Modifier.size(38.dp).clickable(onClick = on), contentAlignment = Alignment.Center) {
-        Icon(icon, desc, tint = Color.White.copy(0.9f), modifier = Modifier.size(18.dp))
-    }
-
-@Composable
-private fun WinText(label: String, on: () -> Unit) =
-    Box(Modifier.height(38.dp).clickable(onClick = on).padding(horizontal = 10.dp), contentAlignment = Alignment.Center) {
-        Text(label, color = Color(0xFFB57BFF), fontSize = 13.sp, fontWeight = FontWeight.Medium, maxLines = 1)
-    }
-
-/** Modo carro: horário no topo e, abaixo, o YouTube (metade de cima) e o Waze/Maps (metade de baixo) em janelas. */
-@Composable
-fun CarMode(onClose: () -> Unit) {
+fun GpsChooserDialog(onPick: (String) -> Unit, onDismiss: () -> Unit) {
     val ctx = LocalContext.current
-    val prefs = remember { ctx.getSharedPreferences("launcher", Context.MODE_PRIVATE) }
-    var dest by remember { mutableStateOf(prefs.getString("carDest", "") ?: "") }
-    LaunchedEffect(Unit) { CarState.load(ctx) }
-    val route = CarState.route   // destino com trajeto ativo (também aparece na tela inicial)
-    LaunchedEffect(Unit) { YtWin.load(ctx) }
-
-    val battery by carBattery()
-    val now by produceState(Date()) { while (true) { value = Date(); delay(1000) } }
-    val hhmm = remember(now.time / 1000) { SimpleDateFormat("HH:mm", Locale.getDefault()).format(now) }
-    val date = remember(now.time / 60000) {
-        SimpleDateFormat("EEEE, d 'de' MMMM", Locale("pt", "BR")).format(now).replaceFirstChar { it.uppercase() }
-    }
-
-    val locPerm = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
-    LaunchedEffect(Unit) {
-        if (ContextCompat.checkSelfPermission(ctx, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED)
-            locPerm.launch(Manifest.permission.ACCESS_FINE_LOCATION)
-    }
-
-    BackHandler { onClose() }
-
-    // área da tela onde a janela do Waze deve aparecer (metade de baixo)
-    var slot by remember { mutableStateOf<Rect?>(null) }
-    val view = LocalView.current
-    val freeform = remember { freeformOn(ctx) }
-    // tela dividida (Waze ao lado) ou pouca altura: layout compacto, YouTube ocupa tudo
-    val cfg = LocalConfiguration.current
-    val compact = remember(cfg) {
-        (android.os.Build.VERSION.SDK_INT >= 24 && ctx.findActivity()?.isInMultiWindowMode == true) || cfg.screenHeightDp < 560
-    }
-    fun openNav(pkg: String, name: String, d: String) {
-        if (!openNavApp(ctx, pkg, d, slot)) Toast.makeText(ctx, "$name não encontrado", Toast.LENGTH_SHORT).show()
-    }
-
-    fun start() {
-        val d = dest.trim()
-        if (d.isEmpty()) { Toast.makeText(ctx, "Digite para onde quer ir", Toast.LENGTH_SHORT).show(); return }
-        prefs.edit().putString("carDest", d).apply()
-        CarState.set(ctx, d)
-        openNav(WAZE_PKG, "Waze", d)
-    }
-
-    Box(
-        Modifier.fillMaxSize()
-            .background(Brush.verticalGradient(listOf(Color(0xFF0B1118), Color(0xFF05080C))))
-    ) {
-        Column(
-            Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.systemBars.union(WindowInsets.displayCutout))
-                .padding(horizontal = 12.dp, vertical = 6.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            // ---- cabeçalho: hora, data e bateria
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text(hhmm, fontSize = 34.sp, fontWeight = FontWeight.Light, color = Color.White)
-                    Text(date, fontSize = 12.sp, color = Color.White.copy(0.75f))
-                }
-                Row(
-                    Modifier.clip(RoundedCornerShape(20.dp)).background(Color.White.copy(0.1f))
-                        .padding(horizontal = 10.dp, vertical = 5.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(Icons.Rounded.BatteryFull, null, tint = Color.White.copy(0.8f), modifier = Modifier.size(20.dp))
-                    Spacer(Modifier.width(4.dp))
-                    Text("$battery%", fontSize = 14.sp, color = Color.White, fontWeight = FontWeight.Medium)
-                }
-                Spacer(Modifier.width(8.dp))
-                // abre o Waze (na tela dividida ele aparece ao lado)
-                Glass(Modifier.size(40.dp), radius = 20.dp, onClick = { openNav(WAZE_PKG, "Waze", route ?: dest.trim()) }) {
-                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Icon(Icons.Rounded.Navigation, "Waze", tint = Color.White, modifier = Modifier.size(20.dp))
-                    }
-                }
-                Spacer(Modifier.width(8.dp))
-                Glass(Modifier.size(40.dp), radius = 20.dp, onClick = onClose) {
-                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Icon(Icons.Rounded.Close, "Fechar", tint = Color.White, modifier = Modifier.size(20.dp))
-                    }
+    val apps = remember { navApps(ctx) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Qual app de GPS?") },
+        text = {
+            Column {
+                Text(
+                    if (apps.isEmpty()) "Nenhum app de GPS encontrado no celular."
+                    else "Escolha uma vez e o Lume lembra. Dá para trocar em Ajustes ▸ Modo carro.",
+                    fontSize = 13.sp
+                )
+                Spacer(Modifier.height(8.dp))
+                apps.forEach { a ->
+                    Text(a.label, fontSize = 17.sp, modifier = Modifier.fillMaxWidth().clickable { onPick(a.pkg) }.padding(vertical = 12.dp))
                 }
             }
-
-            // ---- janela do YouTube (metade de cima)
-            CarWindow(
-                Modifier.fillMaxWidth().weight(1f), "YouTube", Icons.Rounded.PlayCircle, Color(0xFFFF0033),
-                actions = {
-                    WinBtn(Icons.Rounded.Settings, "URL padrão") { YtWin.cfg = true }
-                    if (YtWin.visible) WinBtn(Icons.Rounded.Close, "Fechar") { YtWin.close() }
-                }
-            ) {
-                if (YtWin.visible) {
-                    AndroidView(
-                        factory = { YtWin.view(ctx).also { (it.parent as? ViewGroup)?.removeView(it) } },
-                        modifier = Modifier.fillMaxSize()
-                    )
-                } else {
-                    Column(
-                        Modifier.fillMaxSize().clickable { YtWin.open() },
-                        horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center
-                    ) {
-                        Box(
-                            Modifier.size(56.dp).clip(RoundedCornerShape(18.dp)).background(Color(0xFFFF0033)),
-                            contentAlignment = Alignment.Center
-                        ) { Icon(Icons.Rounded.PlayArrow, null, tint = Color.White, modifier = Modifier.size(36.dp)) }
-                        Spacer(Modifier.height(10.dp))
-                        Text("Toque para abrir o YouTube", fontSize = 14.sp, color = Color.White.copy(0.75f))
-                    }
-                }
-            }
-
-            // ---- janela de navegação (metade de baixo): o app Waze/Maps abre aqui, como janela de verdade
-            if (!compact) CarWindow(
-                Modifier.fillMaxWidth().weight(1f), "Navegação", Icons.Rounded.Navigation, Color(0xFF34C759),
-                actions = {
-                    WinText("Maps") { openNav(MAPS_PKG, "Google Maps", route ?: dest.trim()) }
-                    WinText("Waze") { openNav(WAZE_PKG, "Waze", route ?: dest.trim()) }
-                    if (route != null) WinText("Parar") { CarState.set(ctx, null) }
-                }
-            ) {
-                Column(Modifier.fillMaxSize().padding(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        OutlinedTextField(
-                            value = dest, onValueChange = { dest = it },
-                            modifier = Modifier.weight(1f),
-                            singleLine = true,
-                            placeholder = { Text("Para onde você quer ir?") },
-                            leadingIcon = { Icon(Icons.Rounded.Search, null) },
-                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
-                            keyboardActions = KeyboardActions(onGo = { start() }),
-                            shape = RoundedCornerShape(16.dp)
-                        )
-                        Spacer(Modifier.width(8.dp))
-                        Button(onClick = { start() }, shape = RoundedCornerShape(16.dp)) {
-                            Icon(Icons.Rounded.Navigation, null, modifier = Modifier.size(18.dp))
-                            Spacer(Modifier.width(4.dp))
-                            Text(if (route == null) "Iniciar" else "Atualizar")
-                        }
-                    }
-                    // espaço da janela do Waze (a posição dele é lida daqui)
-                    Box(
-                        Modifier.fillMaxWidth().weight(1f).clip(RoundedCornerShape(14.dp))
-                            .background(Color.Black.copy(0.4f))
-                            .onGloballyPositioned { c ->
-                                val p = c.positionInRoot()
-                                val loc = IntArray(2)
-                                view.getLocationOnScreen(loc)
-                                val l = loc[0] + p.x.roundToInt()
-                                val t = loc[1] + p.y.roundToInt()
-                                slot = Rect(l, t, l + c.size.width, t + c.size.height)
-                            },
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Column(
-                            Modifier.fillMaxSize().padding(16.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center
-                        ) {
-                            Text(
-                                if (route == null) "Digite o destino e toque em Iniciar. O Waze abre aqui, em janela."
-                                else "Navegando para $route",
-                                color = Color.White.copy(0.8f), fontSize = 14.sp
-                            )
-                            if (route != null) {
-                                Spacer(Modifier.height(10.dp))
-                                Button(onClick = { openNav(WAZE_PKG, "Waze", route) }, shape = RoundedCornerShape(14.dp)) {
-                                    Text("Abrir Waze aqui")
-                                }
-                            }
-                            if (!freeform) {
-                                Spacer(Modifier.height(12.dp))
-                                Text(
-                                    "As janelas livres do Android estão desligadas, então o Waze abre em tela cheia. " +
-                                        "Ligue \"Janelas de formato livre\" e \"Forçar redimensionamento\" nas Opções do desenvolvedor e reinicie o celular.",
-                                    color = Color(0xFFFFC857), fontSize = 12.sp
-                                )
-                                TextButton(onClick = {
-                                    runCatching {
-                                        ctx.startActivity(
-                                            Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                        )
-                                    }
-                                }) { Text("Abrir opções do desenvolvedor", fontSize = 12.sp) }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-    }
+        },
+        confirmButton = {},
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancelar") } }
+    )
 }
 
-/** Card da tela inicial: mostra o trajeto em andamento. Tocar abre o modo carro. */
 @Composable
-fun RouteCard(onOpen: () -> Unit) {
+fun YtUrlDialog(onDone: () -> Unit) {
     val ctx = LocalContext.current
-    LaunchedEffect(Unit) { CarState.load(ctx) }
-    val r = CarState.route ?: return
-    Glass(Modifier.fillMaxWidth().height(190.dp), radius = 24.dp) {
-        Box(Modifier.fillMaxSize()) {
-            RouteMap(r, Modifier.fillMaxSize().clip(RoundedCornerShape(24.dp)))
-            // camada transparente: o mapa não rouba a rolagem da tela inicial
-            Box(Modifier.fillMaxSize().clickable(onClick = onOpen))
-            Row(
-                Modifier.align(Alignment.TopStart).padding(10.dp).clip(RoundedCornerShape(14.dp))
-                    .background(Color.Black.copy(0.65f)).padding(horizontal = 10.dp, vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Icon(Icons.Rounded.Navigation, null, tint = Color.White, modifier = Modifier.size(16.dp))
-                Spacer(Modifier.width(6.dp))
-                Text(r, color = Color.White, fontSize = 13.sp, maxLines = 1)
+    var text by remember { mutableStateOf(CarPrefs.ytUrl(ctx)) }
+    AlertDialog(
+        onDismissRequest = onDone,
+        title = { Text("Página do YouTube") },
+        text = {
+            Column {
+                Text(
+                    "Deixe vazio para abrir o YouTube normal. Com um link (playlist, canal ou vídeo), o app abre direto nessa página.",
+                    fontSize = 13.sp
+                )
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(value = text, onValueChange = { text = it }, minLines = 2)
             }
-        }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                var u = text.trim()
+                if (u.isNotEmpty() && !u.startsWith("http")) u = "https://$u"
+                CarPrefs.setYtUrl(ctx, u)
+                onDone()
+            }) { Text("Salvar") }
+        },
+        dismissButton = { TextButton(onClick = onDone) { Text("Cancelar") } }
+    )
+}
+
+/** Ligado ao botão do carro: escolhe o GPS na primeira vez e depois sempre abre a tela dividida. */
+@Composable
+fun CarSplitLayer(show: Boolean, onDone: () -> Unit) {
+    val ctx = LocalContext.current
+    var chooser by remember { mutableStateOf(false) }
+    LaunchedEffect(show) {
+        if (!show) return@LaunchedEffect
+        if (CarPrefs.gps(ctx) == null) chooser = true else { CarSplit.start(ctx); onDone() }
     }
+    if (chooser) GpsChooserDialog(
+        onPick = { CarPrefs.setGps(ctx, it); chooser = false; CarSplit.start(ctx); onDone() },
+        onDismiss = { chooser = false; onDone() }
+    )
 }

@@ -38,6 +38,7 @@ private enum class SPage(val title: String, val sub: String, val icon: ImageVect
     Apps("Lista de apps", "Tamanhos, espaçamento e barra A–Z", Icons.Rounded.ViewList),
     Bars("Barras do sistema", "Barra de status e de navegação", Icons.Rounded.Fullscreen),
     Hidden("Apps ocultos", "Mostrar apps que você escondeu", Icons.Rounded.VisibilityOff),
+    Car("Modo carro", "App de GPS, página do YouTube e tela dividida", Icons.Rounded.DirectionsCar),
     Sys("Sistema e sobre", "Launcher padrão, notificações e novidades", Icons.Rounded.Tune)
 }
 
@@ -275,6 +276,35 @@ fun SettingsScreen(vm: LauncherVM, onClose: () -> Unit, onChangeWallpaper: () ->
                             }
                         }
 
+                        SPage.Car -> {
+                            var gpsDlg by remember { mutableStateOf(false) }
+                            var ytDlg by remember { mutableStateOf(false) }
+                            var tick by remember { mutableStateOf(0) }
+                            val gpsName = remember(tick) { CarPrefs.gpsLabel(ctx) }
+                            val ytUrl = remember(tick) { CarPrefs.ytUrl(ctx) }
+                            Group("TELA DIVIDIDA") {
+                                Text(
+                                    "O botão do carro na tela inicial abre o YouTube em cima e o app de GPS embaixo, em tela dividida.",
+                                    fontSize = 13.sp, color = Color.White.copy(0.65f)
+                                )
+                                ActionRow(Icons.Rounded.Navigation, "App de GPS", gpsName ?: "Nenhum — o Lume pergunta na primeira vez") { gpsDlg = true }
+                                ActionRow(
+                                    Icons.Rounded.PlayCircle, "Página do YouTube",
+                                    if (ytUrl.isBlank()) "Nenhuma — abre o YouTube normal" else ytUrl
+                                ) { ytDlg = true }
+                                ActionRow(
+                                    Icons.Rounded.ViewAgenda, "Dividir a tela sozinho",
+                                    if (SplitService.inst != null) "Ligado" else "Desligado — toque e ative \"Lume\" em Acessibilidade"
+                                ) {
+                                    runCatching { ctx.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) }
+                                }
+                                ActionRow(Icons.Rounded.DirectionsCar, "Abrir agora", "YouTube em cima, GPS embaixo") {
+                                    if (CarPrefs.gps(ctx) == null) gpsDlg = true else CarSplit.start(ctx)
+                                }
+                            }
+                            if (gpsDlg) GpsChooserDialog(onPick = { CarPrefs.setGps(ctx, it); gpsDlg = false; tick++ }, onDismiss = { gpsDlg = false })
+                            if (ytDlg) YtUrlDialog { ytDlg = false; tick++ }
+                        }
                         SPage.Sys -> {
                             Group("SISTEMA") {
                                 ActionRow(Icons.Rounded.Home, "Launcher padrão", "Definir o Lume como início") {

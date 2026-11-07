@@ -108,7 +108,8 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    override fun onResume() { super.onResume(); media.start(); applyBars() }
+    override fun onStart() { super.onStart(); CarSplit.onLumeShown(this) }
+    override fun onResume() { super.onResume(); media.start(); applyBars(); CarSplit.onLumeShown(this) }
     override fun onPause() { super.onPause(); media.stop() }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
@@ -323,7 +324,6 @@ fun LauncherScreen(vm: LauncherVM, media: MediaWatcher, onBars: () -> Unit) {
                             ) {
                                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(18.dp)) {
                                     if (lm == 0 || lm == 1) MusicCard(media)
-                                    if (lm == 0 || lm == 1) RouteCard { showCar = true }
                                     FoldersRow(
                                         vm, byPkg,
                                         onOpen = { openFolder = it },
@@ -514,8 +514,7 @@ fun LauncherScreen(vm: LauncherVM, media: MediaWatcher, onBars: () -> Unit) {
             onChangeWallpaper = { showWp = true },
             onGallery = { picker.launch("image/*") }
         )
-        if (showCar) CarMode(onClose = { showCar = false })
-        YoutubeLayer(docked = showCar)
+        CarSplitLayer(show = showCar, onDone = { showCar = false })
         if (showWp) WallpaperSetup(
             vm, firstRun = !vm.wpAsked,
             onClose = { vm.markWpAsked(); showWp = false },
