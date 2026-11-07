@@ -43,22 +43,23 @@ jobs:
           force-avd-creation: true
           disable-animations: false
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
-          script: bash .github/demo/record.sh Lume.apk demo-raw.mp4
+          script: bash .github/demo/record2.sh Lume.apk
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: demo-raw
           path: |
-            demo-raw.mp4
+            clips
+            logcat.txt
             snaps
           if-no-files-found: warn
-      - name: Publicar vídeo bruto em Releases
+      - name: Publicar clipes em Releases
         if: always()
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          [ -f demo-raw.mp4 ] || exit 0
-          gh release delete demo-video --yes --cleanup-tag 2>/dev/null || true
-          gh release create demo-video demo-raw.mp4 Lume.apk $(ls snaps/* 2>/dev/null) \
-            --title "Vídeo de demonstração (bruto)" \
-            --notes "Gravação do emulador, antes da edição." --prerelease
+          ls clips/*.mp4 >/dev/null 2>&1 || exit 0
+          gh release delete demo-clips --yes --cleanup-tag 2>/dev/null || true
+          gh release create demo-clips clips/*.mp4 $(ls snaps/* 2>/dev/null) logcat.txt \
+            --title "Clipes do emulador (brutos)" \
+            --notes "Um clipe por cena, antes da edição." --prerelease
